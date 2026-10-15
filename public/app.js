@@ -176,6 +176,8 @@
 
   function renderHomeSkeleton() {
     $('next-section').hidden = true;
+    $('rows-section').hidden = true;
+    $('rows-section').innerHTML = '';
     // Loading shows the same shape as the populated screen: the hero
     // skeleton above, the "Drama feed" label, then the feed rows as bars.
     $('feed-label').hidden = false;
@@ -198,6 +200,8 @@
 
   function renderHomeError() {
     $('next-section').hidden = true;
+    $('rows-section').hidden = true;
+    $('rows-section').innerHTML = '';
     $('feed-label').hidden = true;
     var list = $('feed-list');
     list.hidden = true;
@@ -239,6 +243,45 @@
     });
   }
 
+  // ── Home: the browse rows ────────────────────────────────────────────────
+
+  // One poster card in a browse row: the poster tile (a lazy-loaded image
+  // when the drama carries a poster link, else the flat colour tile), the
+  // title and its rating out of 10, or its access label when unrated.
+  function dcardHtml(d) {
+    var poster = d.poster_url
+      ? '<div class="dposter"><img src="' + esc(d.poster_url) + '" alt="" loading="lazy"></div>'
+      : '<div class="dposter" style="background:' + posterColor(d.id) + '"></div>';
+    var meta = d.rating != null
+      ? '<span class="sm muted" style="display:inline-flex;align-items:center;gap:3px">' +
+        '<svg class="star f" viewBox="0 0 24 24" style="width:12px;height:12px"><path d="' + STAR_PATH + '"/></svg>' +
+        Number(d.rating).toFixed(1) + '</span>'
+      : '<span class="sm muted">' + esc(d.access_label) + '</span>';
+    return '<a class="dcard" href="#/drama/' + d.id + '" style="text-decoration:none;color:inherit">' + poster +
+      '<div class="sm" style="font-weight:600;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(d.title) + '</div>' +
+      meta + '</a>';
+  }
+
+  function rowsSectionHtml(label, items) {
+    if (!items || !items.length) return '';
+    return '<div class="section-label">' + esc(label) + '</div>' +
+      '<div class="row" style="overflow-x:auto;padding-bottom:4px">' +
+      items.map(dcardHtml).join('') + '</div>';
+  }
+
+  function renderRows(rows) {
+    var el = $('rows-section');
+    rows = rows || {};
+    var html = rowsSectionHtml('Trending Now', rows.trending) +
+      rowsSectionHtml('New Episodes', rows.new_episodes) +
+      rowsSectionHtml('Top 10', rows.top) +
+      (rows.genres || []).map(function (g) {
+        return rowsSectionHtml(g.genre, g.dramas);
+      }).join('');
+    el.innerHTML = html;
+    el.hidden = !html;
+  }
+
   function feedRowHtml(d, viewerName) {
     var note;
     if (d.note.kind === 'progress') {
@@ -256,7 +299,11 @@
     var follow = d.following
       ? '<button class="fol" data-follow="' + d.id + '" data-on="1">Following</button>'
       : '<button class="btn-secondary" data-follow="' + d.id + '">Follow</button>';
-    return '<li class="list-row"><a href="#/drama/' + d.id + '" class="poster" style="background:' + posterColor(d.id) + ';display:block" aria-label="Open ' + esc(d.title) + '"></a>' +
+    var poster = d.poster_url
+      ? '<a href="#/drama/' + d.id + '" class="poster" style="display:block;overflow:hidden" aria-label="Open ' + esc(d.title) + '">' +
+        '<img src="' + esc(d.poster_url) + '" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block"></a>'
+      : '<a href="#/drama/' + d.id + '" class="poster" style="background:' + posterColor(d.id) + ';display:block" aria-label="Open ' + esc(d.title) + '"></a>';
+    return '<li class="list-row">' + poster +
       '<a class="grow" href="#/drama/' + d.id + '" style="text-decoration:none;color:inherit">' +
       '<div style="font-weight:600">' + esc(d.title) + '</div>' +
       '<div class="sm muted">' + d.seasons + (d.seasons === 1 ? ' season, ' : ' seasons, ') + d.episodes + (d.episodes === 1 ? ' episode' : ' episodes') +
@@ -287,6 +334,8 @@
       // The empty state stands alone: no feed label or empty bordered list
       // around it, and the header's Add drama is hidden so the centred
       // amber one is the only Add drama on the screen.
+      $('rows-section').hidden = true;
+      $('rows-section').innerHTML = '';
       labelEl.hidden = true;
       list.hidden = true;
       list.innerHTML = '';
@@ -301,6 +350,7 @@
     }
     labelEl.hidden = false;
     $('add-drama-btn').hidden = false;
+    renderRows(data.rows);
     list.innerHTML = data.dramas.map(function (d) { return feedRowHtml(d, viewerName); }).join('');
     Array.prototype.forEach.call(list.querySelectorAll('[data-follow]'), function (b) {
       b.addEventListener('click', function () {
@@ -422,11 +472,28 @@
     $('drama-state').innerHTML = '';
     $('drama-body').hidden = false;
 
-    $('drama-poster').style.background = posterColor(data.drama.id);
+    var dp = $('drama-poster');
+    dp.style.background = posterColor(data.drama.id);
+    dp.innerHTML = data.drama.poster_url
+      ? '<img src="' + esc(data.drama.poster_url) + '" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;border-radius:inherit">'
+      : '';
     $('drama-title').textContent = data.drama.title;
     var desc = (data.drama.synopsis ? data.drama.synopsis + ' ' : '') +
       'Added by ' + data.drama.added_by_username;
     $('drama-desc').textContent = desc;
+    // The line under the title: genres, country, year and the editorial
+    // rating out of 10, whatever the drama carries.
+    var meta = [];
+    if (data.drama.genres) meta.push(data.drama.genres);
+    if (data.drama.country) meta.push(data.drama.country);
+    if (data.drama.year) meta.push(String(data.drama.year));
+    if (data.drama.rating != null) meta.push(Number(data.drama.rating).toFixed(1) + ' out of 10');
+    var metaEl = $('drama-meta');
+    metaEl.textContent = meta.join(' · ');
+    metaEl.hidden = !meta.length;
+    var castEl = $('drama-cast');
+    castEl.textContent = data.drama.cast_list ? 'Cast: ' + data.drama.cast_list : '';
+    castEl.hidden = !data.drama.cast_list;
     var folBtn = $('drama-follow');
     folBtn.textContent = data.following ? 'Following' : 'Follow';
     folBtn.className = data.following ? 'fol' : 'btn-secondary';
@@ -943,6 +1010,11 @@
   function openAddDrama() {
     $('drama-title-input').value = '';
     $('drama-desc-input').value = '';
+    $('drama-genres-input').value = '';
+    $('drama-year-input').value = '';
+    $('drama-country-input').value = '';
+    $('drama-rating-input').value = '';
+    $('drama-poster-input').value = '';
     $('add-drama-error').hidden = true;
     showSheet('sheet-add-drama');
     $('drama-title-input').focus();
@@ -952,6 +1024,11 @@
     api('dramas', { method: 'POST', body: {
       title: $('drama-title-input').value,
       synopsis: $('drama-desc-input').value,
+      genres: $('drama-genres-input').value,
+      year: $('drama-year-input').value,
+      country: $('drama-country-input').value,
+      rating: $('drama-rating-input').value,
+      poster_url: $('drama-poster-input').value,
     }}).then(function () {
       hideSheet();
       if (location.hash && location.hash !== '#/') location.hash = '#/';
@@ -962,6 +1039,27 @@
       p.textContent = err.message;
       p.hidden = false;
     });
+  });
+  // Poster upload through the platform's storage (the bridge), with the
+  // link field as the fallback everywhere the bridge is not there.
+  $('poster-upload-btn').addEventListener('click', function () {
+    $('poster-file-input').click();
+  });
+  $('poster-file-input').addEventListener('change', function () {
+    var file = this.files && this.files[0];
+    this.value = '';
+    if (!file) return;
+    if (window.usernode && window.usernode.uploadFile) {
+      toast('Uploading poster');
+      window.usernode.uploadFile(file, { visibility: 'public' }).then(function (stored) {
+        $('drama-poster-input').value = stored.url;
+        toast('Poster uploaded');
+      }).catch(function () {
+        toast('Upload failed, paste a link instead');
+      });
+    } else {
+      toast('Uploads need the Homeroom app, paste a link instead');
+    }
   });
 
   function openAddEpisode() {
