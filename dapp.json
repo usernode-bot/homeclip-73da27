@@ -74,7 +74,7 @@
     { "id": "posters.studio", "name": "Poster studio renders", "path": "/posters", "expectText": "Poster search", "expectSelector": "input[type='search']", "visual": true, "impact": ["public/js/views/posters.js", "public/js/views/profile.js", "public/js/router.js", "public/js/i18n.js", "server.js", "providers/**"] },
     { "name": "Home demo shows short dramas", "path": "/?demo=1", "expectText": "Short dramas" },
     { "name": "Verified demo record shows its facts", "path": "/drama/9001?demo=1", "expectText": "Original title" },
-    { "name": "Unverified record shows the neutral placeholder", "path": "/drama/9003?demo=1", "expectSelector": "img[src*='placeholder']", "expectText": "Metadata awaiting review" },
+    { "name": "Unverified record shows titled generated art", "path": "/drama/9003?demo=1", "expectSelector": "img[src*='/poster/9003.svg']", "expectText": "Metadata awaiting review" },
     { "name": "Flagged demo record keeps its verified facts", "path": "/drama/9004?demo=1", "expectText": "Metadata verified", "expectSelector": "img[src*='/img/demo/poster-9004.svg']", "allowConsoleErrors": true },
     { "id": "posters.scan", "name": "Studio artwork scan controls", "path": "/posters?demo=1", "expectText": "Check all artwork", "allowConsoleErrors": true, "visual": true, "impact": ["server.js", "public/js/views/posters.js", "public/js/i18n.js"] },
     { "name": "Studio offers artwork replace", "path": "/posters?demo=1", "expectText": "Replace artwork" },
