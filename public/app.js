@@ -833,8 +833,8 @@
   function loadWatch(id) {
     // Lazily loaded: the player's module and, only when an episode actually
     // streams HLS, hls.js under it. The first load never fetches either.
-    // Identity and VIP settle first: both views read HC.viewer(), and at
-    // boot they open before /api/me and /api/subscription have answered.
+    // Identity and VIP settle first: the player reads HC.viewer() for both,
+    // and at boot it can open before /api/me and /api/subscription answer.
     Promise.all([mePromise, subPromise]).then(function () {
       return ensureScript('watch.js');
     }).then(function () {
@@ -844,10 +844,16 @@
     });
   }
   function loadDownloads() {
-    Promise.all([mePromise, subPromise]).then(function () {
-      return ensureScript('downloads.js');
-    }).then(function () {
+    // Identity must be known before the view can tell a guest from a member,
+    // but the subscription answer only splits VIP from free, so the view
+    // renders without waiting for it and re-renders when it arrives (the
+    // request can never fail the page: the server answers free on error and
+    // a failed fetch falls back to the remembered state).
+    Promise.all([mePromise, ensureScript('downloads.js')]).then(function () {
       window.HCDownloads.show();
+      subPromise.then(function () {
+        if (!$('view-downloads').hidden) window.HCDownloads.show();
+      });
     }).catch(function () {
       $('dl-state').hidden = false;
       $('dl-body').hidden = true;

@@ -36,7 +36,11 @@ const GUEST_PUBLIC_KEY = (process.env.USERNODE_GUEST_JWT_PUBLIC_KEY || '')
 // Paths that stay open without authentication. Add a path here (and add it
 // with `app.get`/`app.post` below) if you deliberately want it public.
 // Everything else requires a valid platform-issued JWT.
-const PUBLIC_API_PATHS = new Set(['/health']);
+// /api/subscription is a GET whose answer for anyone without an account is
+// the constant free shape, so opening it to signed-out visitors (the page
+// asks for it on every boot, and a 401 would log a console error) carries
+// no data.
+const PUBLIC_API_PATHS = new Set(['/health', '/api/subscription']);
 
 app.use(express.json());
 
@@ -402,6 +406,23 @@ async function ensureSchema() {
       expires_at TIMESTAMPTZ,
       UNIQUE (user_id, plan)
     )`);
+  // A table kept from an earlier release (it stored plan_id and renewal_date
+  // with a TEXT user_id) is left alone by CREATE IF NOT EXISTS, so the
+  // subscription query below would fail on its missing columns. Add this
+  // shape's columns and carry the purchase state over, so an existing
+  // subscriber keeps the VIP they hold in that shape too.
+  await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS username TEXT`);
+  await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan TEXT`);
+  await pool.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`);
+  const subCols = await pool.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_name = 'subscriptions'`);
+  const subNames = new Set(subCols.rows.map((r) => r.column_name));
+  if (subNames.has('plan_id') || subNames.has('renewal_date')) {
+    await pool.query(`
+      UPDATE subscriptions
+        SET plan = COALESCE(plan, plan_id), expires_at = COALESCE(expires_at, renewal_date)
+        WHERE plan IS NULL OR expires_at IS NULL`);
+  }
   // First-party analytics events (views, watch time, drop-off, …).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS events (
@@ -1145,23 +1166,32 @@ app.put('/api/episodes/:id/progress', async (req, res) => {
 // until real payment keys exist. On the staging demo route, the demo viewer
 // is VIP without storing anything (the row would leak into the plain route
 // on the same staging database, which must stay production-shaped).
-app.get('/api/subscription', (req, res) => {
-  if (IS_STAGING && req.query.demo === '1' && req.user) {
-    return res.json({ vip: true, plan: 'vip', status: 'active', expires_at: null, demo: true });
-  }
-  if (!req.user) return res.json({ vip: false });
-  pool.query(
-    `SELECT plan, status, expires_at FROM subscriptions
-      WHERE user_id = $1 AND status = 'active' AND (expires_at IS NULL OR expires_at > now())
-      ORDER BY started_at DESC LIMIT 1`,
-    [req.user.id]
-  ).then(r => {
+//
+// The answer is always 200: a signed-out viewer and a viewer with no
+// subscription record both get the free shape, and an unexpected database
+// failure is logged here and answered as free too — the page must open
+// either way, and the client treats every non-VIP answer as free.
+const FREE_SUB = { vip: false, isVip: false, status: 'free', plan: null, expires_at: null };
+app.get('/api/subscription', async (req, res) => {
+  try {
+    if (IS_STAGING && req.query.demo === '1' && req.user) {
+      return res.json({ vip: true, isVip: true, plan: 'vip', status: 'active', expires_at: null, demo: true });
+    }
+    if (!req.user) return res.json(FREE_SUB);
+    const r = await pool.query(
+      `SELECT plan, status, expires_at FROM subscriptions
+        WHERE user_id = $1 AND status = 'active' AND (expires_at IS NULL OR expires_at > now())
+        ORDER BY started_at DESC LIMIT 1`,
+      [req.user.id]
+    );
     const s = r.rows[0];
-    return res.json(s ? { vip: true, plan: s.plan, status: s.status, expires_at: s.expires_at } : { vip: false });
-  }).catch(err => {
-    console.error(err);
-    return res.status(500).json({ error: 'Could not read the subscription' });
-  });
+    return res.json(s
+      ? { vip: true, isVip: true, plan: s.plan, status: s.status, expires_at: s.expires_at }
+      : FREE_SUB);
+  } catch (err) {
+    console.error('subscription lookup failed', err);
+    return res.json(FREE_SUB);
+  }
 });
 
 // First-party analytics. The event names are whitelisted server-side so a
