@@ -3,7 +3,27 @@
   "icon": {
     "emoji": "📺"
   },
-  "secrets": [],
+  "secrets": [
+    {
+      "key": "STRIPE_SECRET_KEY",
+      "description": "Stripe SECRET key in TEST (sandbox) mode, starts with sk_test_. Get it from dashboard.stripe.com, Developers, API keys, with test mode on. Leave empty to show the VIP page without checkout.",
+      "required": false,
+      "private": true
+    },
+    {
+      "key": "STRIPE_WEBHOOK_SECRET",
+      "description": "Stripe TEST-mode webhook signing secret (starts with whsec_) for the endpoint /api/webhooks/stripe. Optional: checkout also confirms on return from Stripe.",
+      "required": false,
+      "private": true
+    },
+    {
+      "key": "PAYMENT_PROVIDER",
+      "description": "Which payment provider checkout uses: stripe (sandbox, implemented), midtrans or xendit (adapters structured, not built yet).",
+      "required": false,
+      "default": "stripe",
+      "private": false
+    }
+  ],
   "governance": {
     "preset": "you_or_the_group"
   },
@@ -57,7 +77,13 @@
         "styles/**",
         "dapp.json"
       ]
-    }
+    },
+    { "name": "Feed empty state", "path": "/", "expectText": "No dramas yet" },
+    { "id": "demo-feed", "name": "Populated demo", "path": "/?demo=1", "expectText": "The Tide Table", "visual": true, "impact": ["public/**", "styles/**"] },
+    { "name": "Drama page", "path": "/?demo=1#/drama/900001", "expectText": "Season 2" },
+    { "id": "vip.page", "name": "VIP page with IDR plans", "path": "/#/vip", "expectText": "Rp 59.000", "visual": true, "impact": ["public/**", "server.js", "styles/**", "providers/**"] },
+    { "name": "Manage subscription renders", "path": "/#/vip/manage", "expectText": "Manage subscription" },
+    { "name": "Payment history renders", "path": "/#/vip/payments", "expectText": "Payment history" }
   ],
   "visibility": {
     "build": "public",
