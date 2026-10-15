@@ -983,6 +983,16 @@ async function ensureTrackerSchema() {
       is_demo BOOLEAN NOT NULL DEFAULT false,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
+  // Sample-drama metadata: nullable, so dramas added before this change and
+  // dramas added without them keep working. `cast` itself is a reserved SQL
+  // word, so the cast column is cast_list.
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS year INT`);
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS country TEXT`);
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS genres TEXT`);
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS rating REAL
+    CHECK (rating IS NULL OR (rating BETWEEN 0 AND 10))`);
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS cast_list TEXT`);
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS poster_url TEXT`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tracker_episodes (
       id BIGSERIAL PRIMARY KEY,
@@ -1317,6 +1327,143 @@ async function seedDemoCommunity() {
   }
 }
 
+// ── Sample dramas (staging only) ─────────────────────────────────────────
+// Twelve made-up dramas so a fresh preview looks full. Each carries full
+// metadata (country, year, genres, an editorial rating out of 10, fictional
+// cast) and 8 to 12 titled episodes, each with a placeholder watch link and
+// a mix of Free, VIP and Free-with-ads access. Same rules as the demo
+// above: fixed ids, ON CONFLICT DO NOTHING, fake identities only (Priya,
+// Sam, Jun added them), is_demo rows only, nothing here runs in production,
+// and every response without ?demo=1 leaves them out, so the plain route
+// stays production-shaped. Posters stay the app's flat colour tiles unless
+// a drama carries its own poster_url.
+const SAMPLE_DRAMAS = [
+  { id: 910001, title: 'Midnight Letters', country: 'Korea', year: 2025,
+    genres: 'Romance', rating: 8.7, by: 'Priya', addedAgo: 45, epAgo: 12,
+    cast: 'Han Ji-woo, Park Seo-yun, Lee Kang-min, Cho Da-in',
+    synopsis: 'A night-shift postal clerk starts delivering letters that were never sent, and every one lands with the person who needed it most. When an envelope in her own handwriting arrives, dated ten years from now, she begins answering her future one letter at a time.',
+    vip: [4, 9], ads: [6],
+    eps: ['The Undelivered Tray', 'Return to Sender', "Ink That Won't Dry", 'The Night Desk', 'Ten Years Ahead', 'A Stamp for Tomorrow', 'The Dead Letter Shelf', 'Winter Deliveries', 'Her Own Handwriting', 'The Last Post'] },
+  { id: 910002, title: 'The Last Harbor', country: 'Indonesia', year: 2024,
+    genres: 'Thriller', rating: 8.2, by: 'Sam', addedAgo: 60, epAgo: 9,
+    cast: 'Bagas Prasetyo, Rania Wijaya, Dimas Anggara, Sari Kusnadi',
+    synopsis: 'A fishing crew returns to a Java Sea port one man short, and the captain swears the sea gave him no choice. A coast guard investigator with her own history in that port picks the story apart, tide by tide.',
+    vip: [2, 7], ads: [4],
+    eps: ['Nineteen Hours', 'The Missing Logbook', 'Slack Water', 'The Second Boat', 'Ghost Nets', 'Monsoon File', 'The Harbor Wall', 'What the Sea Kept'] },
+  { id: 910003, title: 'Crown of Ash', country: 'China', year: 2023,
+    genres: 'Historical', rating: 8.9, by: 'Jun', addedAgo: 75, epAgo: 30,
+    cast: 'Lin Wanyu, Zhao Cheng, Xu Meilin, Fang Zhou',
+    synopsis: "The empire's youngest general is handed a burnt province and an order to make it loyal again. Between a shrewd regent and a famine she cannot name in writing, she learns that ruling well costs more than winning wars.",
+    vip: [5, 11], ads: [8],
+    eps: ['The Burnt Province', 'An Oath of Rice', "The Regent's Game", 'Ash Roads', 'The Grain Convoy', 'A Season of Banners', 'The Paper Tiger', 'Frost over the Yamen', 'Letters from the Front', 'The Long Winter', 'A Crown of Ash', 'The Reckoning'] },
+  { id: 910004, title: 'Neon Hearts', country: 'Japan', year: 2025,
+    genres: 'Romance, Comedy', rating: 7.9, by: 'Jun', addedAgo: 20, epAgo: 6,
+    cast: 'Aoi Fujimura, Ken Yamashiro, Miyu Tanabe, Riku Hoshino',
+    synopsis: 'A failed idol and a nosy late-night radio host share an Osaka alley, a ruined karaoke booth and one increasingly public misunderstanding. Neither of them will admit the show everyone tunes in for is them.',
+    vip: [7], ads: [3, 8],
+    eps: ['Dead Air', 'The Karaoke Truce', 'Song Number Four', 'Rumors at 2 a.m.', 'The Apology Track', 'Live from the Alley', 'A Duet, Sort Of', 'The Ratings Spike', 'Sign-Off'] },
+  { id: 910005, title: 'Shadow Archive', country: 'Korea', year: 2024,
+    genres: 'Mystery', rating: 8.5, by: 'Priya', addedAgo: 40, epAgo: 15,
+    cast: 'Yoon Tae-oh, Seo Ha-eun, Jung Min-seok, Bae Chae-rin',
+    synopsis: 'An archivist in a sealed records hall finds a file about a murder that has not happened yet. Every folder she opens points at someone she knows, and the archive has already indexed her.',
+    vip: [6, 10], ads: [2],
+    eps: ['File 001', 'The Sealed Wing', 'A Borrowed Name', 'Index of the Missing', 'The Second Folder', 'Cold Stacks', 'The Wrong Record', 'Chain of Custody', 'The Archive Answers', 'Final Entry'] },
+  { id: 910006, title: 'Café Under the Rain', country: 'Thailand', year: 2025,
+    genres: 'Slice of Life', rating: 7.8, by: 'Sam', addedAgo: 25, epAgo: 4,
+    cast: 'Nalin Suriya, Thanakit Boon, Ploy Rattanakorn, Anon Chai',
+    synopsis: 'A Chiang Mai coffee shop opens its doors only when it rains, and the regulars plan their lives around the weather. Over one stormy season, four strangers become the kind of friends who refill each other\'s cups.',
+    vip: [8], ads: [5],
+    eps: ['Forecast: Open', "The Regulars' Table", 'One Sugar, No Rain', 'The Broken Umbrella', 'Monsoon Season', 'Closing Early', 'The Last Dry Day', 'Sunshine Policy'] },
+  { id: 910007, title: "Dragon's Oath", country: 'China', year: 2024,
+    genres: 'Fantasy, Action', rating: 8.8, by: 'Sam', addedAgo: 55, epAgo: 10,
+    cast: 'Bai Luqing, Tang Renjie, Hua Ying, Guan Zhihao',
+    synopsis: "A blacksmith's apprentice inherits an oath blade that chooses its own bearer, and a war between the nine river sects is already looking for it. To keep it, she has to honor a promise a dragon made two hundred years ago.",
+    vip: [3, 9, 12], ads: [6],
+    eps: ['The Oath Blade', 'Nine Rivers, Nine Sects', 'The Forge at Night', 'The River Gate', 'Smoke and Iron', "The Dragon's Term", 'Apprentice No More', 'The Broken Sheath', 'War Council', 'The Long Climb', 'Two Hundred Years', 'The Oath Kept'] },
+  { id: 910008, title: 'Borrowed Time', country: 'Korea', year: 2026,
+    genres: 'Sci-Fi, Drama', rating: 9.1, by: 'Jun', addedAgo: 10, epAgo: 2,
+    cast: 'Kang Da-hyun, Im Yoo-ri, Shin Woo-jin, Oh Na-kyung',
+    synopsis: 'A clockmaker signs up for a trial that lends her twenty extra years, payable in kind. The bills come due as memories, and the collector is someone she once loved.',
+    vip: [4, 8, 10], ads: [7],
+    eps: ['The Trial', 'Twenty Years, No Interest', 'The First Payment', 'Collateral', 'A Debt of Memories', 'The Collector Calls', 'Compounding', 'Grace Period', 'The Fine Print', 'Settled in Full'] },
+  { id: 910009, title: 'Family Rules', country: 'Indonesia', year: 2025,
+    genres: 'Comedy, Family', rating: 7.6, by: 'Priya', addedAgo: 30, epAgo: 7,
+    cast: 'Bagus Nugroho, Lestari Halim, Fajar Pratama, Dewi Anggraini',
+    synopsis: 'Three generations under one Jakarta roof agree on a house rulebook to stop the arguing, then spend the season lawyering every clause. Rule 12, about the last portion of sambal, nearly ends them all.',
+    vip: [9], ads: [4],
+    eps: ['The Rulebook', 'Clause by Clause', 'The Sambal Accords', 'Quiet Hours', 'The Remote Control Treaty', 'Family Court', 'Amendment Season', 'The House Meeting', 'House Rules, Revised'] },
+  { id: 910010, title: 'Silent Witness', country: 'Japan', year: 2023,
+    genres: 'Crime', rating: 8.3, by: 'Jun', addedAgo: 70, epAgo: 26,
+    cast: 'Mizuki Harada, Sora Kitagawa, Naomi Ueshima, Takumi Ono',
+    synopsis: 'A sign-language interpreter is the only person who saw what happened on the platform, and the suspect list includes the detective she must interpret for. Speaking up would end her career, and staying silent has its own price.',
+    vip: [5, 9], ads: [3],
+    eps: ['Platform Nine', 'The Interpreter', 'What the Hands Said', 'Chain of Silence', 'The Second Witness', 'Interview Room Three', 'The Loose Transcript', 'Cross-Examination', 'Spoken At Last'] },
+  { id: 910011, title: 'Spring Again', country: 'Korea', year: 2026,
+    genres: 'Romance', rating: 8.1, by: 'Priya', addedAgo: 8, epAgo: 1,
+    cast: 'Cha Min-joon, Yeo Ha-rin, Kwon Do-yoon, Moon Se-yeon',
+    synopsis: 'A botanist who catalogues cherry blossoms keeps meeting the same stranger one spring apart, each of them a year older and a year more careful. Somewhere between the first bloom and the last, they have to decide which spring is the real one.',
+    vip: [7], ads: [2],
+    eps: ['First Bloom', 'A Year Between', 'The Specimen Book', 'Petal Count', 'Late Frost', 'The Second Spring', 'Cherry Season', 'Full Bloom'] },
+  { id: 910012, title: 'The Golden Heir', country: 'Thailand', year: 2024,
+    genres: 'Drama', rating: 8.0, by: 'Sam', addedAgo: 50, epAgo: 20,
+    cast: 'Kannika Prasert, Thanin Wattana, Malee Chaiyaporn, Nop Sangthong',
+    synopsis: "A Bangkok family's gold-trading empire needs an heir, and the will names the one relative nobody has heard from in fifteen years. Every cousin, creditor and housekeeper picks a side before the reading is over.",
+    vip: [4, 10], ads: [6],
+    eps: ['The Reading', 'Fifteen Years Gone', 'The Gold Ledger', 'Cousins at War', "The Housekeeper's Key", 'A Long-Lost Letter', 'The Second Will', 'Gold and Water', 'The Family Meeting', 'The Vault', 'The Heir Chooses'] },
+];
+
+// Who of the fake members follows which sample drama: this is the signal the
+// Trending Now row orders by, and nothing else reads it.
+const SAMPLE_FOLLOWS = [
+  ['Priya', 910001], ['Priya', 910005], ['Priya', 910011],
+  ['Sam', 910002], ['Sam', 910007], ['Sam', 910012],
+  ['Jun', 910003], ['Jun', 910004], ['Jun', 910008], ['Jun', 910010],
+];
+
+async function seedSampleDramas() {
+  // Fixed episode ids from 9200001 upward, in definition order, so a re-seed
+  // after a partial boot still lands on the same rows.
+  let epId = 9200001;
+  for (const s of SAMPLE_DRAMAS) {
+    const slug = s.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    await pool.query(
+      `INSERT INTO tracker_dramas
+         (id, title, synopsis, added_by_id, added_by_username, is_demo, created_at,
+          year, country, genres, rating, cast_list, poster_url)
+       VALUES ($1, $2, $3, $4, $5, true, now() - make_interval(days => $6::int),
+               $7, $8, $9, $10, $11, NULL)
+       ON CONFLICT (id) DO NOTHING`,
+      [s.id, s.title, s.synopsis, DEMO_USERS[s.by], s.by, s.addedAgo,
+       s.year, s.country, s.genres, s.rating, s.cast]
+    );
+    for (let i = 0; i < s.eps.length; i++) {
+      const number = i + 1;
+      // 35 to 60 minutes, varied deterministically per drama and episode.
+      const minutes = 38 + ((s.id + i * 7) % 20);
+      const access = s.vip.includes(number) ? 'vip' : s.ads.includes(number) ? 'ads' : 'free';
+      await pool.query(
+        `INSERT INTO tracker_episodes
+           (id, drama_id, season, number, title, minutes, watch_url, access,
+            added_by_id, added_by_username, is_demo, created_at)
+         VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, true,
+                 now() - make_interval(days => $10::int))
+         ON CONFLICT (id) DO NOTHING`,
+        [epId, s.id, number, s.eps[i], minutes,
+         'https://example.com/watch/' + slug + '-e' + number, access,
+         DEMO_USERS[s.by], s.by, s.epAgo]
+      );
+      epId++;
+    }
+  }
+  for (const [name, dramaId] of SAMPLE_FOLLOWS) {
+    await pool.query(
+      `INSERT INTO tracker_follows (user_id, username, drama_id, created_at)
+       VALUES ($1, $2, $3, now() - interval '8 days') ON CONFLICT DO NOTHING`,
+      [DEMO_USERS[name], name, dramaId]
+    );
+  }
+}
+
 // On the first ?demo=1 request of the viewing account, write its follows and
 // watches on the demo dramas, once, with fixed keys. The viewer follows
 // Harbour Lights and The Quiet Wing, has watched Harbour Lights season 2 up
@@ -1520,7 +1667,8 @@ tracker.get('/feed', async (req, res) => {
     const vip = (await vipStatus(req)).vip;
     // Dramas newest first.
     const dramas = await pool.query(
-      `SELECT id, title, synopsis, added_by_id, added_by_username, created_at
+      `SELECT id, title, synopsis, added_by_id, added_by_username, created_at,
+              year, country, genres, rating, cast_list, poster_url
          FROM tracker_dramas WHERE ${demoClause(req, 'is_demo', 1)}
         ORDER BY created_at DESC, id DESC`,
       demoParams(req)
@@ -1552,7 +1700,7 @@ tracker.get('/feed', async (req, res) => {
     let eps = { rows: [] };
     if (ids.length) {
       eps = await pool.query(
-        `SELECT e.id, e.drama_id, e.season, e.number,
+        `SELECT e.id, e.drama_id, e.season, e.number, e.created_at,
                 ARRAY(SELECT w.username FROM tracker_watches w WHERE w.episode_id = e.id
                       ORDER BY w.watched_at) AS watchers,
                 EXISTS (SELECT 1 FROM tracker_watches w WHERE w.episode_id = e.id AND w.user_id = $3) AS viewer_watched,
@@ -1607,6 +1755,10 @@ tracker.get('/feed', async (req, res) => {
       return {
         id: Number(d.id), title: d.title, synopsis: d.synopsis,
         added_by_username: d.added_by_username,
+        year: d.year, country: d.country,
+        genres: d.genres ? d.genres.split(',').map(g => g.trim()).filter(Boolean) : [],
+        rating: d.rating == null ? null : Number(d.rating),
+        poster_url: d.poster_url,
         seasons: Number(c.seasons), episodes: Number(c.episodes),
         following: followed.has(Number(d.id)),
         // Drama-level chip: VIP wins if any episode is VIP, then ads, then free.
@@ -1615,6 +1767,57 @@ tracker.get('/feed', async (req, res) => {
         note,
       };
     });
+
+    // The Home rows: Trending Now (the most followed, then the best rated),
+    // New Episodes (the drama whose newest episode was added most recently),
+    // Top 10 (the best rated out of 10), and one row per genre. Same demo
+    // gating as the feed itself, so the plain route renders these rows from
+    // the dramas it really has: empty when there are none.
+    const followCounts = ids.length ? await pool.query(
+      `SELECT f.drama_id, COUNT(*)::int AS n FROM tracker_follows f
+        WHERE f.drama_id = ANY($2)
+          AND ($1 OR NOT EXISTS (SELECT 1 FROM tracker_dramas d WHERE d.id = f.drama_id AND d.is_demo))
+        GROUP BY f.drama_id`,
+      [...demoParams(req), ids]
+    ) : { rows: [] };
+    const followsBy = new Map(followCounts.rows.map(r => [Number(r.drama_id), Number(r.n)]));
+    const latestEp = new Map();
+    for (const e of eps.rows) {
+      const dId = Number(e.drama_id);
+      const t = e.created_at ? new Date(e.created_at).getTime() : 0;
+      if (!latestEp.has(dId) || t > latestEp.get(dId)) latestEp.set(dId, t);
+    }
+    const card = d => ({ id: d.id, title: d.title, rating: d.rating,
+      access_label: d.access_label, poster_url: d.poster_url });
+    const trending = out.slice().sort((a, b) =>
+      (followsBy.get(b.id) || 0) - (followsBy.get(a.id) || 0) ||
+      (b.rating == null ? -1 : b.rating) - (a.rating == null ? -1 : a.rating) ||
+      a.id - b.id).slice(0, 12);
+    const newEpisodes = out.slice()
+      .sort((a, b) => (latestEp.get(b.id) || 0) - (latestEp.get(a.id) || 0) || a.id - b.id)
+      .filter(d => latestEp.has(d.id)).slice(0, 12);
+    const top = out.filter(d => d.rating != null)
+      .sort((a, b) => b.rating - a.rating || a.id - b.id).slice(0, 10);
+    const genres = new Map();
+    // Every visible drama belongs in its genre rows, not only those that fit
+    // in the trending row; within a genre, best rated first.
+    const genreSource = out.slice().sort((a, b) =>
+      (b.rating == null ? -1 : b.rating) - (a.rating == null ? -1 : a.rating) || a.id - b.id);
+    for (const d of genreSource) {
+      for (const g of d.genres) {
+        if (!genres.has(g)) genres.set(g, []);
+        if (genres.get(g).length < 12) genres.get(g).push(card(d));
+      }
+    }
+    const genreRows = [...genres.entries()]
+      .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+      .map(([genre, list]) => ({ genre, dramas: list }));
+    const rows = {
+      trending: trending.map(card),
+      new_episodes: newEpisodes.map(card),
+      top: top.map(card),
+      genres: genreRows,
+    };
 
     // The hero and its upcoming episodes, when there is a next to watch.
     if (next) {
@@ -1636,7 +1839,7 @@ tracker.get('/feed', async (req, res) => {
       delete next.hero.season;
       delete next.later;
     }
-    return res.json({ vip, dramas: out, next });
+    return res.json({ vip, dramas: out, next, rows });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Feed failed to load' });
@@ -1649,10 +1852,37 @@ tracker.post('/dramas', async (req, res) => {
     const synopsis = typeof req.body.synopsis === 'string' ? req.body.synopsis.trim() : '';
     if (!title || title.length > 80) return res.status(400).json({ error: 'A title of 1 to 80 characters is required' });
     if (synopsis.length > 280) return res.status(400).json({ error: 'The description must be 280 characters or fewer' });
+    // Optional metadata: genres as a comma-separated list, a year, a
+    // country, an editorial rating out of 10 and a poster link. All may be
+    // left out; dramas without them keep the flat colour poster tile.
+    const year = req.body.year == null || req.body.year === '' ? null : parseInt(req.body.year, 10);
+    if (year !== null && (isNaN(year) || year < 1900 || year > 2100)) {
+      return res.status(400).json({ error: 'Year must be between 1900 and 2100' });
+    }
+    const country = typeof req.body.country === 'string' ? req.body.country.trim() : '';
+    if (country.length > 60) return res.status(400).json({ error: 'Country must be 60 characters or fewer' });
+    const genreList = typeof req.body.genres === 'string'
+      ? req.body.genres.split(',').map(g => g.trim()).filter(Boolean).slice(0, 6)
+      : [];
+    if (genreList.some(g => g.length > 30)) {
+      return res.status(400).json({ error: 'Each genre must be 30 characters or fewer' });
+    }
+    const rating = req.body.rating == null || req.body.rating === '' ? null : Number(req.body.rating);
+    if (rating !== null && (!isFinite(rating) || rating < 0 || rating > 10)) {
+      return res.status(400).json({ error: 'Rating must be between 0 and 10' });
+    }
+    const poster_url = typeof req.body.poster_url === 'string' && req.body.poster_url.trim()
+      ? req.body.poster_url.trim() : null;
+    if (poster_url && (!/^https:\/\//.test(poster_url) || poster_url.length > 500)) {
+      return res.status(400).json({ error: 'The poster link must start with https://' });
+    }
     const r = await pool.query(
-      `INSERT INTO tracker_dramas (title, synopsis, added_by_id, added_by_username)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [title, synopsis || null, req.user.id, req.user.username]
+      `INSERT INTO tracker_dramas (title, synopsis, year, country, genres, rating, poster_url, added_by_id, added_by_username)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [title, synopsis || null, year, country || null,
+       genreList.length ? genreList.join(', ') : null,
+       rating == null ? null : Math.round(rating * 10) / 10,
+       poster_url, req.user.id, req.user.username]
     );
     return res.status(201).json({ drama: r.rows[0] });
   } catch (err) {
@@ -1681,7 +1911,8 @@ tracker.get('/dramas/:id', async (req, res) => {
     const viewerId = req.user ? req.user.id : null;
     const vip = (await vipStatus(req)).vip;
     const d = await pool.query(
-      `SELECT id, title, synopsis, added_by_id, added_by_username, created_at
+      `SELECT id, title, synopsis, added_by_id, added_by_username, created_at,
+              year, country, genres, rating, cast_list, poster_url
          FROM tracker_dramas WHERE id = $1 AND ${demoClause(req, 'is_demo', 2)}`,
       [req.params.id, ...demoParams(req)]
     );
@@ -2265,6 +2496,7 @@ async function start() {
   if (IS_STAGING) {
     try {
       await seedTrackerDemo();
+      await seedSampleDramas();
       await seedStagingVip();
     } catch (err) {
       console.error('tracker demo seed failed', err);

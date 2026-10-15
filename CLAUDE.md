@@ -139,7 +139,10 @@ one filled button is Watch, in warm amber (the `action` token with
 `on-action`, and `action-soft` for the "New episode" tint); Follow buttons
 stay outlined and quiet. The signature element is the TV: next-to-watch and
 upcoming episodes are drawn as TV screens, and progress is always one thin
-amber bar. Posters there are flat colour tiles.
+amber bar. Posters there are flat colour tiles; a drama MAY carry a
+`poster_url` (uploaded through the platform's storage from the Add drama
+sheet, or pasted as a link), which is lazy-loaded into the tile everywhere
+it is drawn.
 
 The tracker also sells VIP: its access chip (`chip-vip` with a lock icon,
 on the `accent` token) marks VIP episodes and a quiet `chip-soft` marks
@@ -224,3 +227,11 @@ keeping every text pair at 4.5:1 or more in both looks.
 - **Comments, likes and reviews** on the tracker are moderated with
   `moderation.js` (profanity and spam checks).
 - **Tracker vocabulary** also includes VIP, Free, Free with ads.
+- **Tracker sample dramas:** twelve more made-up dramas (ids 910001-910012
+  in `tracker_dramas`, their episodes from 9200001 up) are seeded on boot in
+  staging alongside the demo, with full metadata (country, year, genres, an
+  editorial rating out of 10, fictional cast, a mix of Free, VIP and
+  Free-with-ads access). The tracker's Home rows (Trending Now, New Episodes,
+  Top 10, one row per genre) are built server-side in `/api/tracker/feed`
+  from whatever dramas the route can see. Trending orders by follow count;
+  the sample dramas' seeded follows (Priya, Sam, Jun) are its demo signal.

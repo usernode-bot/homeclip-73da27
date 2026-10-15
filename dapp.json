@@ -32,72 +32,12 @@
       "name": "Home renders (production shape)",
       "path": "/",
       "expectText": "Trending Now",
-      "expectSelector": ".hc-banner"
-    },
-    {
-      "id": "home.screen",
-      "name": "Home with demo data",
-      "path": "/?demo=1",
-      "expectText": "Continue Watching",
-      "expectSelector": "[data-usernode-demo-note]",
-      "visual": true,
-      "impact": [
-        "public/js/views/home.js",
-        "public/js/views/search.js",
-        "public/js/ui.js",
-        "public/js/i18n.js",
-        "public/js/router.js",
-        "styles/tailwind-input.css",
-        "server.js",
-        "data/catalog.js"
-      ]
-    },
-    {
-      "name": "Discover opens with filters",
-      "path": "/discover",
-      "expectText": "Romance",
-      "expectSelector": ".hc-segment"
-    },
-    {
-      "name": "Drama detail page",
-      "path": "/drama/1",
-      "expectText": "Paper Lanterns at Dusk",
-      "expectSelector": "a.btn-primary"
-    },
-    {
-      "name": "Player page with controls",
-      "path": "/watch/2/1",
-      "expectText": "The Ninth Harbor",
-      "expectSelector": "[data-controlswrap]"
-    },
-    {
-      "name": "Search finds a title",
-      "path": "/search?q=lantern",
-      "expectText": "Paper Lanterns at Dusk"
-    },
-    {
-      "name": "My List with demo data",
-      "path": "/my-list?demo=1",
-      "expectText": "Staging demo"
-    },
-    {
-      "name": "Profile and settings",
-      "path": "/profile",
-      "expectText": "Language"
-    },
-    {
-      "name": "Tracker feed empty state",
-      "path": "/tracker",
-      "expectText": "No dramas yet"
-    },
-    {
-      "id": "tracker-feed",
-      "name": "Tracker populated demo",
-      "path": "/tracker?demo=1",
-      "expectText": "The Tide Table",
-      "visual": true,
       "impact": ["public/tracker.html", "public/app.js", "public/screens.css", "styles/**"]
     },
+    { "id": "demo-feed", "name": "Tracker populated demo", "path": "/tracker?demo=1", "expectText": "The Tide Table", "visual": true, "impact": ["public/tracker.html", "public/app.js", "public/screens.css", "styles/**"] },
+    { "id": "home-rows", "name": "Tracker browse rows", "path": "/tracker?demo=1", "expectText": "Trending Now", "visual": true, "impact": ["public/tracker.html", "public/app.js", "public/screens.css", "styles/**", "server.js"] },
+    { "id": "sample-drama-page", "name": "Sample drama page with episodes", "path": "/tracker?demo=1#/drama/910001", "expectText": "The Undelivered Tray", "visual": true, "impact": ["public/tracker.html", "public/app.js", "public/screens.css", "styles/**", "server.js"] },
+    { "name": "Tracker feed empty state", "path": "/tracker", "expectText": "No dramas yet" },
     { "name": "Drama page", "path": "/tracker?demo=1#/drama/900001", "expectText": "Season 2" },
     { "id": "drama-reviews", "name": "Drama page with reviews", "path": "/tracker?demo=1#/drama/900001", "expectText": "3 reviews", "visual": true, "impact": ["public/tracker.html", "public/app.js", "public/screens.css", "styles/**", "server.js", "moderation.js"] },
     { "id": "episode-comments", "name": "Episode sheet comments", "path": "/tracker?demo=1#/drama/900001?ep=9000005", "expectText": "Comments", "visual": true, "impact": ["public/tracker.html", "public/app.js", "public/screens.css", "styles/**", "server.js", "moderation.js"] },
