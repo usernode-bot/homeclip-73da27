@@ -95,24 +95,33 @@ tables you've marked private), etc.
 
 ## About HomeClip
 
-Watch your homeroom's own serial drama together
-
-_(add a sentence or two more of product context here so Claude Code has a
-shared understanding of what this app is for)_
+Watch your homeroom's own serial drama together. HomeClip is a
+mobile-first drama streaming app: an original sample catalog of 30
+invented dramas, detail pages, a real video player with progress
+saving and resume, Discover filters, My List and watch history, and a
+Profile with language and theme settings. The whole UI is bilingual
+(English / Bahasa Indonesia). No sign-up beyond the platform identity,
+no payments. All content is invented for the app: no real show, poster
+or licensed video is used (see `data/catalog.js`).
 
 ## Design
 
-This app's look. The first real version fills in the blanks; every later
-change follows it, and updates it when a request changes the look on purpose.
-
-- **Palette:** _(name the accent, any second colour and the neutrals, e.g.
-  "accent: tomato red; second: basil green; neutrals: warm greys")_
-- **Signature element:** _(the one thing on screen drawn from this app's
-  subject, which no other app would have)_
-- **Type scale:** `text-title`, `text-heading`, `text-body`, `text-small`
-  _(change their sizes in `tailwind.config.js` if you must, not their number)_
-- **One fixed look:** _(only for an app drawn as its own scene, such as a
-  game: which look, and why. Otherwise delete this line.)_
+- **Palette:** accent is a violet-blue (`#5c4aeb` light / `#7e6cff`
+  dark) on calm neutral surfaces; dark look is a deep indigo ground
+  (`#0a0a14`), light look a near-white lilac ground. All colours come
+  from the tokens in `styles/tailwind-input.css` (`--ground`,
+  `--surface`, `--raised`, `--fg`, `--muted`, `--line`, `--accent`).
+- **Signature element:** the generated SVG poster and banner artwork
+  (`/poster/:id.svg`, `/banner/:id.svg`): each drama gets
+  deterministic genre-hued art with a play-glyph badge, so the catalog
+  reads as a streaming wall without any licensed imagery. The
+  Continue Watching row carries a thin accent progress bar
+  (`.hc-progress`) under the title.
+- **Type scale:** `text-title`, `text-heading`, `text-body`,
+  `text-small`, nothing in between.
+- **Both looks:** the app follows the viewer's Homeroom theme (in-app
+  theme setting on Profile wins over it when set). Every new screen
+  gets both a light and a dark value per token.
 
 The kit is in `styles/tailwind-input.css`: colour tokens with a light and
 a dark value (named in `tailwind.config.js`), and a few components
@@ -142,6 +151,22 @@ Re-theme by changing the token values there, keeping every text pair at
 
 ## App-specific conventions
 
-_(optional — e.g. "all currency values stored as integer cents, not
-floats"; "the `posts` table is append-only"; "avoid adding new
-dependencies"; etc.)_
+- **No new dependencies.** The frontend is vanilla ES modules in
+  `public/js/` with path-based routing in `router.js` (History API);
+  styling is precompiled Tailwind only. No framework, no runtime CSS.
+- **Generated art is served outside `/api/`.** `<img>` and `<track>`
+  elements cannot attach the auth header, and the poster, banner and
+  subtitle routes return non-sensitive generated content, so they live
+  at `/poster/:id.svg`, `/banner/:id.svg` and `/subtitles/:lang.vtt`.
+  Never move them under `/api/` and never serve user data there.
+- **Video strategy:** every episode points at one committed
+  extensionless URL (`/sample/clip`); the player appends `.webm` and
+  `.mp4` and offers both as `<source>` elements, so the browser picks a
+  codec it supports.
+- **Per-user tables are `staging:private`:** `my_list`, `watch_progress`
+  and `settings`. `?demo=1` (staging) seeds the viewing account demo rows
+  marked `is_demo`; responses without `?demo=1` exclude those rows so
+  plain routes stay production-shaped.
+- **Progress saving is throttled** (every 5 s while playing, plus on
+  pause, pagehide and view unmount) and only stored for signed-in
+  viewers; guests can browse and watch but never write.

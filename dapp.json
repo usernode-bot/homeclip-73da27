@@ -7,5 +7,63 @@
   "governance": {
     "preset": "you_or_the_group"
   },
-  "tests": []
+  "tests": [
+    {
+      "name": "Home renders (production shape)",
+      "path": "/",
+      "expectText": "Trending Now",
+      "expectSelector": ".hc-banner"
+    },
+    {
+      "id": "home.screen",
+      "name": "Home with demo data",
+      "path": "/?demo=1",
+      "expectText": "Continue Watching",
+      "expectSelector": "[data-usernode-demo-note]",
+      "visual": true,
+      "impact": [
+        "public/js/views/home.js",
+        "public/js/views/search.js",
+        "public/js/ui.js",
+        "public/js/i18n.js",
+        "public/js/router.js",
+        "styles/tailwind-input.css",
+        "server.js",
+        "data/catalog.js"
+      ]
+    },
+    {
+      "name": "Discover opens with filters",
+      "path": "/discover",
+      "expectText": "Romance",
+      "expectSelector": ".hc-segment"
+    },
+    {
+      "name": "Drama detail page",
+      "path": "/drama/1",
+      "expectText": "Paper Lanterns at Dusk",
+      "expectSelector": "a.btn-primary"
+    },
+    {
+      "name": "Player page with controls",
+      "path": "/watch/2/1",
+      "expectText": "The Ninth Harbor",
+      "expectSelector": "[data-controlswrap]"
+    },
+    {
+      "name": "Search finds a title",
+      "path": "/search?q=lantern",
+      "expectText": "Paper Lanterns at Dusk"
+    },
+    {
+      "name": "My List with demo data",
+      "path": "/my-list?demo=1",
+      "expectText": "Staging demo"
+    },
+    {
+      "name": "Profile and settings",
+      "path": "/profile",
+      "expectText": "Language"
+    }
+  ]
 }
