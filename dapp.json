@@ -1,0 +1,11 @@
+{
+  "description": "Watch your homeroom's own serial drama together",
+  "icon": {
+    "emoji": "📺"
+  },
+  "secrets": [],
+  "governance": {
+    "preset": "you_or_the_group"
+  },
+  "tests": []
+}
