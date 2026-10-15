@@ -17,7 +17,6 @@
         if (v === null) return 'null';
         if (typeof v === 'string') return v;
         if (typeof v === 'number' || typeof v === 'boolean') return String(v);
-        if (typeof v === 'function') return '[Function ' + (v.name || 'anonymous') + ']';
         if (v instanceof Error) return (v.stack || (v.name + ': ' + v.message));
         if (depth > 3) return '[…]';
         var seen = new WeakSet();
@@ -26,8 +25,8 @@
             if (seen.has(val)) return '[Circular]';
             seen.add(val);
           }
-          if (typeof val === 'function') return '[Function ' + (val.name || 'anonymous') + ']';
-          if (val instanceof Error) return val.stack || (val.name + ': ' + val.message);
+          if (typeof val === 'function') return '[Function ' + (v.name || 'anonymous') + ']';
+          if (val instanceof Error) return val.stack || (v.name + ': ' + v.message);
           return val;
         });
       } catch (e) { try { return String(v); } catch (_) { return '[unserializable]'; } }
@@ -118,7 +117,7 @@
        every action. -->
   <div data-spec-screen="1" id="view-home">
     <div class="app">
-    <div class="top"><div class="brand"><svg style="color:rgb(var(--accent));width:24px;height:24px" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M9 21h6M12 17v4"/></svg>HomeClip</div><button id="add-drama-btn" class="btn-secondary"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add drama</button></div>
+    <div class="top"><div class="brand"><svg style="color:rgb(var(--accent));width:24px;height:24px" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M9 21h6M12 17v4"/></svg>HomeClip</div><div style="display:flex;gap:8px"><a id="vip-button" href="#/vip" class="btn-secondary" style="text-decoration:none">VIP</a><button id="add-drama-btn" class="btn-secondary"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add drama</button></div></div>
     <div class="pad">
     <div id="home-state" hidden></div>
     <div id="next-section" hidden>
@@ -157,6 +156,15 @@
     <div class="foot"><button id="add-episode-btn" class="btn-secondary"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add episode</button><button class="link" id="report-drama-btn"><svg viewBox="0 0 24 24"><path d="M5 21V4h11l-2 4 2 4H5"/></svg>Report</button><button class="link" id="remove-drama-btn" hidden><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>Remove</button></div>
     </div>
     </div>
+    </div>
+  </div>
+
+  <!-- VIP: plans, Manage subscription, Payment history and the return from
+       checkout, all drawn into #vip-body by app.js. -->
+  <div data-spec-screen="3" id="view-vip" hidden>
+    <div class="app">
+    <div class="top"><button class="icon-btn" id="vip-back" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><span class="brand" id="vip-title">HomeClip VIP</span><span class="w-11"></span></div>
+    <div class="pad" id="vip-body"></div>
     </div>
   </div>
 
@@ -200,6 +208,12 @@
       <input id="ep-minutes-input" class="field" type="number" min="1" max="600" placeholder="e.g. 52" autocomplete="off">
       <label class="section-label" for="ep-url-input" style="margin-top:12px">Link to watch</label>
       <input id="ep-url-input" class="field" maxlength="500" placeholder="e.g. https://example.com/watch/123" autocomplete="off">
+      <label class="section-label" for="ep-access-input" style="margin-top:12px">Access</label>
+      <select id="ep-access-input" class="field">
+        <option value="free">Free</option>
+        <option value="vip">VIP</option>
+        <option value="ads">Free with ads</option>
+      </select>
     </div>
   </div>
   <div id="sheet-episode" role="dialog" aria-modal="true" aria-labelledby="episode-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
@@ -212,6 +226,7 @@
       <h3 class="text-body font-semibold" id="episode-detail-title"></h3>
       <div class="sm muted mt-1" id="episode-detail-meta"></div>
       <div class="sm mt-1" id="episode-detail-watchers"></div>
+      <div class="mt-1" id="episode-detail-access"></div>
       <a id="episode-detail-link" class="link" target="_blank" rel="noopener" hidden>Open the link</a>
       <div class="foot">
         <button id="report-episode-btn" class="btn-secondary">Report</button>
@@ -230,6 +245,31 @@
       <p class="sm muted mb-2" id="report-context"></p>
       <label class="section-label" for="report-reason">Reason</label>
       <textarea id="report-reason" class="field" maxlength="500" rows="3" placeholder="What is wrong with it, e.g. This is not a real episode"></textarea>
+    </div>
+  </div>
+
+  <div id="sheet-paywall" role="dialog" aria-modal="true" aria-labelledby="paywall-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
+    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <button class="link" data-close>Not now</button>
+        <h2 id="paywall-heading" class="text-heading">VIP episode</h2>
+        <span class="w-11"></span>
+      </div>
+      <h3 class="text-body font-semibold">This episode is for VIP members</h3>
+      <p class="sm muted mt-1" id="paywall-detail"></p>
+      <p class="sm muted mt-1">From Rp 59.000, cancel any time.</p>
+      <div class="foot"><a href="#/vip" class="btn-primary" style="text-decoration:none">See VIP plans</a></div>
+    </div>
+  </div>
+  <div id="sheet-ad" role="dialog" aria-modal="true" aria-labelledby="ad-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
+    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <span class="chip chip-soft">Sponsored</span>
+        <h2 id="ad-heading" class="text-heading">Ad</h2>
+        <span class="w-11"></span>
+      </div>
+      <div class="sm muted rounded-lg bg-raised p-4 text-center" style="height:120px;display:flex;align-items:center;justify-content:center">An ad would play here. Your episode starts in <b id="ad-count" class="mx-1">5</b>s</div>
+      <a href="#/vip" class="link">Go VIP to skip ads</a>
     </div>
   </div>
 
