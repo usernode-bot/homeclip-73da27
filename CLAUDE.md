@@ -126,7 +126,10 @@ Watch, on the next episode.
   numbers on a drama's page sit in small TV screens. Progress is always one
   thin amber bar. Posters are flat colour tiles: each drama gets one of four
   colours (teal, amber, ink, slate) in turn, so nobody has to upload
-  anything. Access shows as a chip: the accent VIP chip with a lock icon
+  anything. A drama MAY carry a `poster_url` (uploaded through the platform's
+  storage from the Add drama sheet, or pasted as a link): the image is then
+  lazy-loaded into the tile, everywhere the tile is drawn. Access shows as a
+  chip: the accent VIP chip with a lock icon
   wherever access matters, a quiet chip for "Free with ads".
 - **Type scale:** `text-title` (28), `text-heading` (20), `text-body` (16),
   `text-small` (14). The typeface is the system's rounded face
@@ -173,6 +176,15 @@ keeping every text pair at 4.5:1 or more in both looks.
   access levels (Harbour Lights S2E6 and The Quiet Wing are VIP; S2E8 and
   Meridian Court are Free with ads). Staging also seeds fake subscriptions,
   payments and the `STAGE10` coupon for the shots' fixture accounts only.
+- **Sample dramas:** twelve more made-up dramas (ids 910001-910012, their
+  episodes from 9200001 up) seeded on boot in staging alongside the demo,
+  with full metadata: country, year, genres, an editorial rating out of 10,
+  fictional cast, and a mix of Free, VIP and Free-with-ads access. The Home
+  rows (Trending Now, New Episodes, Top 10, and one row per genre) are built
+  server-side in `/api/feed` from whatever dramas the route can see, so they
+  work the same for real dramas in production. Trending orders by follow
+  count; the sample dramas' seeded follows (Priya, Sam, Jun) are that row's
+  demo signal.
 - **Vocabulary:** drama, season, episode, Follow, Following, Watch,
   watched, Next to watch, Continue this season, Drama feed, Add drama,
   Add episode, Report, Remove, VIP, Free, Free with ads. One idea, one word,

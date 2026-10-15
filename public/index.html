@@ -131,6 +131,10 @@
     <div class="row" id="upcoming-row" style="overflow-x:auto;padding-bottom:4px"></div>
     </div>
 
+    <!-- The browse rows (Trending Now, New Episodes, Top 10, and one row
+         per genre), filled by app.js from the feed's rows payload. -->
+    <div id="rows-section" hidden></div>
+
     <div class="section-label" id="feed-label">Drama feed</div>
     <ul class="list" id="feed-list"></ul>
     </div>
@@ -144,7 +148,7 @@
     <div class="pad">
     <div id="drama-state" hidden></div>
     <div id="drama-body">
-    <div class="head"><div class="poster" id="drama-poster"></div><div class="grow"><h1 class="title" id="drama-title"></h1><div class="sm muted" id="drama-desc"></div><div class="head-actions"><button class="fol" id="drama-follow">Follow</button><button class="btn-secondary" id="share-drama-btn"><svg viewBox="0 0 24 24"><path d="M12 15V4M8 7l4-4 4 4"/><path d="M6 11H4v10h16V11h-2"/></svg>Share</button></div><div class="rating-line" id="drama-rating" hidden><svg class="star f" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/></svg><span id="rating-avg" style="font-weight:600"></span><span class="sm muted" id="rating-count"></span></div></div></div>
+    <div class="head"><div class="poster" id="drama-poster"></div><div class="grow"><h1 class="title" id="drama-title"></h1><div class="sm muted" id="drama-meta" hidden></div><div class="sm muted" id="drama-desc"></div><div class="sm muted" id="drama-cast" hidden></div><div class="head-actions"><button class="fol" id="drama-follow">Follow</button><button class="btn-secondary" id="share-drama-btn"><svg viewBox="0 0 24 24"><path d="M12 15V4M8 7l4-4 4 4"/><path d="M6 11H4v10h16V11h-2"/></svg>Share</button></div><div class="rating-line" id="drama-rating" hidden><svg class="star f" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/></svg><span id="rating-avg" style="font-weight:600"></span><span class="sm muted" id="rating-count"></span></div></div></div>
 
     <div class="section-label">Seasons</div>
     <div class="seg" id="season-seg"></div>
@@ -175,7 +179,7 @@
   <!-- Sheets: Add drama, Add episode, episode details, Report. -->
   <div id="sheet-backdrop" class="fixed inset-0 z-40 hidden bg-fg/40"></div>
   <div id="sheet-add-drama" role="dialog" aria-modal="true" aria-labelledby="add-drama-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
-    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+    <div class="sheet-scroll rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
       <div class="mb-3 flex items-center justify-between gap-2">
         <button class="link" data-close>Cancel</button>
         <h2 id="add-drama-heading" class="text-heading">Add drama</h2>
@@ -186,10 +190,31 @@
       <input id="drama-title-input" class="field" maxlength="80" placeholder="e.g. Harbour Lights" autocomplete="off">
       <label class="section-label" for="drama-desc-input" style="margin-top:12px">Description</label>
       <textarea id="drama-desc-input" class="field" maxlength="280" rows="3" placeholder="A sentence or two about it, e.g. A ferry town keeps its secrets"></textarea>
+      <label class="section-label" for="drama-genres-input" style="margin-top:12px">Genres</label>
+      <input id="drama-genres-input" class="field" maxlength="180" placeholder="e.g. Romance, Comedy, comma separated" autocomplete="off">
+      <div class="flex gap-3" style="margin-top:12px">
+        <div class="grow">
+          <label class="section-label" for="drama-year-input">Year</label>
+          <input id="drama-year-input" class="field" type="number" min="1900" max="2100" placeholder="e.g. 2025" autocomplete="off">
+        </div>
+        <div class="grow">
+          <label class="section-label" for="drama-country-input">Country</label>
+          <input id="drama-country-input" class="field" maxlength="60" placeholder="e.g. Korea" autocomplete="off">
+        </div>
+      </div>
+      <label class="section-label" for="drama-rating-input" style="margin-top:12px">Rating out of 10 (optional)</label>
+      <input id="drama-rating-input" class="field" type="number" min="0" max="10" step="0.1" placeholder="e.g. 8.5" autocomplete="off">
+      <label class="section-label" for="drama-poster-input" style="margin-top:12px">Poster</label>
+      <div class="flex gap-2">
+        <input id="drama-poster-input" class="field grow" maxlength="500" placeholder="e.g. https://example.com/poster.jpg" autocomplete="off">
+        <button id="poster-upload-btn" class="btn-secondary" type="button">Upload</button>
+        <input id="poster-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" class="hidden">
+      </div>
+      <p class="sm muted" style="margin-top:4px">No poster is fine: HomeClip draws one.</p>
     </div>
   </div>
   <div id="sheet-add-episode" role="dialog" aria-modal="true" aria-labelledby="add-episode-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
-    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+    <div class="sheet-scroll rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
       <div class="mb-3 flex items-center justify-between gap-2">
         <button class="link" data-close>Cancel</button>
         <h2 id="add-episode-heading" class="text-heading">Add episode</h2>
