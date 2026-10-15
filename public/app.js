@@ -556,6 +556,10 @@
 
   // ── Boot ────────────────────────────────────────────────────────────────
 
+  // The skeleton shows while /api/me is still pending too, not only while
+  // the feed request is: route() (which calls loadHome) waits for it.
+  if (!/^#\/drama\/\d+$/.test(location.hash || '#/')) renderHomeSkeleton();
+
   api('me').then(function (me) {
     viewerName = me.user ? me.user.username : null;
     isGuest = !!me.guest;
