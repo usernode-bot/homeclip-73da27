@@ -1,791 +1,920 @@
-// HomeClip client. Path-routed views over the JSON API in server.js.
-// The client never decides VIP access itself: every payload it renders is
-// already gated by the server (locked VIP episodes arrive without a watch
-// URL; ad episodes arrive with requiresAd, which VIP users never get).
+/* HomeClip client: the drama feed (screen 1) and a drama's page (screen 2),
+ * with hash routes #/ and #/drama/:id, sheets for Add drama, Add episode,
+ * episode details and Report. The markup and classes are the ones the spec's
+ * screens drew; this script only fills them from data and wires the actions.
+ */
 (function () {
   'use strict';
 
-  const view = document.getElementById('view');
-  const vipButton = document.getElementById('vip-button');
+  // The iframe's token, forwarded on every request, and ?demo=1 passed on
+  // when the page has it.
+  var params = new URLSearchParams(location.search);
+  var TOKEN = params.get('token') || '';
+  var DEMO = params.get('demo') === '1';
 
-  // The shell injects the platform token as ?token= on load; after that it
-  // rides in a header so internal navigation can drop it from the URL.
-  const TOKEN = new URLSearchParams(location.search).get('token')
-    || (window.usernode && window.usernode.token) || '';
-
-  let timer = null;
-  let renderSeq = 0;
-
-  /* ── Small helpers ────────────────────────────────────────────────────── */
-
-  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
-
-  // Whole rupiah with dot separators, e.g. Rp 59.000. Done by hand so the
-  // format is the same whatever Intl data the browser carries.
-  const idr = (n) => 'Rp ' + String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-
-  const fmtDate = (iso) => new Date(iso).toLocaleDateString('en-GB', {
-    day: 'numeric', month: 'short', year: 'numeric',
-  });
-
-  async function api(path, opts) {
+  function api(path, opts) {
     opts = opts || {};
-    const headers = {};
-    if (TOKEN) headers['x-usernode-token'] = TOKEN;
+    var sep = path.indexOf('?') === -1 ? '?' : '&';
+    var url = '/api/' + path + (DEMO ? sep + 'demo=1' : '');
+    var headers = Object.assign(
+      { 'Content-Type': 'application/json' },
+      TOKEN ? { 'x-usernode-token': TOKEN } : {}
+    );
+    // A staging preview may be shown as of a chosen moment.
     if (window.usernode && window.usernode.previewNow) {
       headers['x-usernode-now'] = window.usernode.now().toISOString();
     }
-    if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
-    const res = await fetch(path, {
+    return fetch(url, {
       method: opts.method || 'GET',
-      headers,
+      headers: headers,
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (data) {
+        if (!res.ok) {
+          var err = new Error(data.error || 'Something went wrong');
+          err.status = res.status;
+          err.data = data;
+          throw err;
+        }
+        return data;
+      });
     });
-    let data = {};
-    try { data = await res.json(); } catch { /* non-JSON error body */ }
-    if (!res.ok) {
-      const err = new Error(data.message || data.error || 'Request failed');
-      err.status = res.status;
-      err.data = data;
-      throw err;
-    }
-    return data;
   }
 
-  const svg = (inner, cls) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="${cls || 'h-5 w-5'}" aria-hidden="true">${inner}</svg>`;
-  const LOCK = svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>', 'h-3.5 w-3.5');
-  const TICK = svg('<path d="M5 12l4 4L19 6"/>', 'h-4 w-4');
-  const PLAY = svg('<path d="M7 5l12 7-12 7z"/>', 'h-4 w-4');
-  const PLUS = svg('<path d="M12 5v14M5 12h14"/>', 'h-4 w-4');
-  const CHECKED = svg('<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>', 'h-6 w-6');
-  const UNCHECKED = svg('<circle cx="12" cy="12" r="9"/>', 'h-6 w-6');
-
-  const POSTER = {
-    accent: 'background:rgb(var(--accent))',
-    fg: 'background:rgb(var(--fg))',
-    muted: 'background:rgb(var(--muted))',
-    raised: 'background:rgb(var(--raised))',
-  };
-  const posterStyle = (token) => POSTER[token] || POSTER.accent;
-
-  function accessChip(access) {
-    if (access === 'vip') return `<span class="chip chip-vip">${LOCK}VIP</span>`;
-    if (access === 'ads') return '<span class="chip chip-soft">Free with ads</span>';
-    return '<span class="chip chip-soft">Free</span>';
+  // Posters are flat colour tiles; each drama gets one of four colours in
+  // turn: teal, amber, ink, slate. Keyed off the id so both screens agree.
+  var POSTER_COLORS = [
+    'rgb(var(--accent))',
+    'rgb(var(--action))',
+    'rgb(var(--fg))',
+    'rgb(var(--muted))',
+  ];
+  function posterColor(id) {
+    return POSTER_COLORS[((Number(id) % 4) + 4) % 4];
   }
 
-  function statusChip(status) {
-    if (status === 'active') return '<span class="chip chip-vip">Active</span>';
-    return `<span class="chip chip-soft">${status === 'canceled' ? 'Canceled' : 'Expired'}</span>`;
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
   }
 
-  function paymentStatusChip(status) {
-    const label = { paid: 'Paid', pending: 'Pending', failed: 'Failed', refunded: 'Refunded' }[status] || status;
-    if (status === 'paid') return `<span class="chip chip-vip">${label}</span>`;
-    return `<span class="chip chip-soft">${esc(label)}</span>`;
+  // Names for "watched by …": the viewer is "you", always first.
+  function watchedBy(names, viewerName) {
+    if (!names || !names.length) return '';
+    var me = names.indexOf(viewerName) !== -1;
+    var parts = names.filter(function (n) { return n !== viewerName; });
+    if (me) parts.unshift('you');
+    return parts.join(', ');
   }
 
-  function skeletonList() {
-    return `<ul class="list" aria-hidden="true">
-      ${[0, 1, 2, 3].map(() => `<li class="list-row"><div class="h-12 w-12 flex-none rounded-md skeleton"></div><div class="flex min-w-0 grow flex-col gap-2"><div class="h-4 w-1/2 rounded skeleton"></div><div class="h-3 w-1/3 rounded skeleton"></div></div></li>`).join('')}
-    </ul>`;
+  function svg(path) {
+    return '<svg viewBox="0 0 24 24"><path d="' + path + '"/></svg>';
   }
 
-  function errorState(message, detail) {
-    return `<section class="state-error">
-      <p class="text-body font-medium">${esc(message)}</p>
-      <p class="text-small text-muted">${esc(detail || 'You can retry — nothing else in the app is affected.')}</p>
-      <button id="retry" class="btn-secondary">Retry</button>
-    </section>`;
+  var $ = function (id) { return document.getElementById(id); };
+  var viewerName = null;
+  var isGuest = false;
+
+  // ── Sheets ──────────────────────────────────────────────────────────────
+
+  var openSheet = null;
+  function showSheet(id) {
+    hideSheet();
+    openSheet = $(id);
+    openSheet.classList.remove('hidden');
+    $('sheet-backdrop').classList.remove('hidden');
   }
-
-  function emptyState(title, detail, linkHtml) {
-    return `<section class="state-empty">
-      <p class="text-body font-medium">${esc(title)}</p>
-      <p class="text-small text-muted">${esc(detail)}</p>
-      ${linkHtml || ''}
-    </section>`;
+  function hideSheet() {
+    if (openSheet) openSheet.classList.add('hidden');
+    openSheet = null;
+    clearInterval(adTimer);
+    $('sheet-backdrop').classList.add('hidden');
   }
-
-  function renderError(err, what) {
-    const accountNeeded = err.status === 401 && err.data && err.data.error === 'account_required';
-    view.innerHTML = errorState(
-      accountNeeded ? 'Make an account to continue' : (what || 'Something went wrong'),
-      accountNeeded
-        ? 'Browsing works without one; this action needs a Homeroom account.'
-        : 'The load failed. You can retry — nothing else in the app is affected.'
-    );
-    const r = document.getElementById('retry');
-    if (r) r.addEventListener('click', () => render());
-  }
-
-  /* ── Navigation ───────────────────────────────────────────────────────── */
-
-  function navigate(path) {
-    history.pushState({}, '', path);
-    render();
-  }
-
-  document.addEventListener('click', (e) => {
-    const a = e.target.closest('a[data-link]');
-    if (!a) return;
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-    e.preventDefault();
-    navigate(a.getAttribute('href'));
+  $('sheet-backdrop').addEventListener('click', hideSheet);
+  Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (b) {
+    b.addEventListener('click', hideSheet);
   });
 
-  window.addEventListener('popstate', () => render());
+  // ── Home: the drama feed ────────────────────────────────────────────────
 
-  function updateHeader(sub) {
-    vipButton.textContent = sub.vip ? 'Manage' : 'VIP';
-    vipButton.setAttribute('href', sub.vip ? '/vip/manage' : '/vip');
+  var homeLoad = 0;
+
+  function renderHomeSkeleton() {
+    $('next-section').hidden = true;
+    // Loading shows the same shape as the populated screen: the hero
+    // skeleton above, the "Drama feed" label, then the feed rows as bars.
+    $('feed-label').hidden = false;
+    var state = $('home-state');
+    state.hidden = false;
+    var bar = function (w) { return '<div class="skeleton" style="height:12px;width:' + w + '"></div>'; };
+    var row = function () {
+      return '<li class="list-row"><div class="skeleton" style="width:48px;height:68px;border-radius:6px;flex:none"></div>' +
+        '<div class="grow" style="display:flex;flex-direction:column;gap:6px">' + bar('60%') + bar('40%') + '</div></li>';
+    };
+    state.innerHTML =
+      '<div class="hero" style="margin-bottom:4px"><div class="skeleton" style="height:150px;border-radius:12px"></div>' +
+      '<div style="display:flex;gap:12px;margin-top:12px">' +
+      '<div class="grow" style="display:flex;flex-direction:column;gap:6px">' + bar('70%') + bar('35%') + '</div>' +
+      '<div class="skeleton" style="width:110px;height:44px;border-radius:8px;flex:none"></div></div></div>';
+    var list = $('feed-list');
+    list.hidden = false;
+    list.innerHTML = row() + row() + row() + row();
   }
 
-  /* ── Home ─────────────────────────────────────────────────────────────── */
+  function renderHomeError() {
+    $('next-section').hidden = true;
+    $('feed-label').hidden = true;
+    var list = $('feed-list');
+    list.hidden = true;
+    list.innerHTML = '';
+    var state = $('home-state');
+    state.hidden = false;
+    state.innerHTML =
+      '<div class="state-error"><div class="text-body font-semibold">The feed could not be loaded</div>' +
+      '<p class="text-small" style="color:rgb(var(--muted))">Nothing you marked was lost. Check your connection and try again.</p>' +
+      '<button id="retry-btn" class="btn-secondary">Retry</button></div>';
+    $('retry-btn').addEventListener('click', loadHome);
+  }
 
-  async function viewHome(sub) {
-    let data;
-    try { data = await api('/api/feed'); } catch (err) { return renderError(err, 'The drama feed could not load'); }
+  function heroHtml(next) {
+    var pct = next.progress ? Math.round((next.progress.watched / next.progress.total) * 100) : 0;
+    $('hero-season').textContent = next.dramaTitle + ', Season ' + next.season;
+    $('hero-title').textContent = 'Episode ' + next.hero.number + ': ' + next.hero.title;
+    $('hero-bar').style.width = pct + '%';
+    $('hero-note').innerHTML =
+      (next.progress ? esc(next.progress.watched + ' of ' + next.progress.total + ' watched this season') + '<br>' : '') +
+      esc(next.hero.minutes ? next.hero.minutes + ' min' : '') +
+      (next.hero.access !== 'free' ? ' ' + accessChip(next.hero.access) : '');
+    $('hero-watch').onclick = function () {
+      watchEpisode(Object.assign({ season: next.season }, next.hero), loadHome);
+    };
+  }
 
-    const parts = [];
-    parts.push(`<div class="flex items-center justify-between gap-2">
-      <button id="add-drama-toggle" class="btn-secondary">${PLUS} Add drama</button>
-      ${sub.vip ? `<a data-link href="/vip" class="chip chip-vip no-underline">${LOCK}VIP</a>` : ''}
-    </div>
-    <section id="add-drama-form" class="card flex flex-col gap-3" hidden>
-      <h2 class="text-heading">Add a drama</h2>
-      <label class="flex flex-col gap-1 text-small text-muted">Title
-        <input id="drama-title" class="field" placeholder="e.g. Harbour Lights">
-      </label>
-      <label class="flex flex-col gap-1 text-small text-muted">Short description (optional)
-        <input id="drama-desc" class="field" placeholder="e.g. A ferry town keeps its secrets">
-      </label>
-      <p id="drama-error" class="text-small text-muted" hidden></p>
-      <button id="drama-save" class="btn-primary self-start">Add drama</button>
-    </section>`);
+  function upcomingHtml(next) {
+    var row = $('upcoming-row');
+    row.innerHTML = next.upcoming.map(function (e) {
+      return '<div class="ep" data-drama="' + next.dramaId + '">' +
+        '<div class="scr">Ep ' + e.number + '</div><div class="foot"></div>' +
+        '<div class="sm">' + esc(e.title) + '</div>' + accessChip(e.access) + '</div>';
+    }).join('');
+    Array.prototype.forEach.call(row.children, function (el) {
+      el.addEventListener('click', function () {
+        location.hash = '#/drama/' + el.getAttribute('data-drama');
+      });
+    });
+  }
 
-    if (data.hero) {
-      const he = data.hero.episode;
-      const pct = data.hero.seasonTotal ? Math.round(data.hero.watchedInSeason * 100 / data.hero.seasonTotal) : 0;
-      parts.push(`<div>
-        <h2 class="section-label">Next to watch</h2>
-        <section class="card p-3">
-          <div class="flex flex-col justify-end gap-2 rounded-xl border-4 border-fg bg-accent p-4 text-on-accent" style="min-height:9.5rem">
-            <div class="flex items-center justify-between gap-2">
-              <span class="text-small font-medium">${esc(data.hero.dramaTitle)}, Season ${data.hero.seasonNumber}</span>
-              ${he.access === 'vip' ? `<span class="chip chip-vip">${LOCK}VIP</span>` : ''}
-            </div>
-            <div class="text-heading">Episode ${he.number}: ${esc(he.title)}</div>
-            <div class="h-1 w-full rounded bg-on-accent/30"><div class="h-1 rounded bg-on-accent" style="width:${pct}%"></div></div>
-          </div>
-          <div class="mt-3 flex items-center justify-between gap-2">
-            <span class="text-small text-muted">${data.hero.watchedInSeason} of ${data.hero.seasonTotal} watched this season${he.durationMin ? ' · ' + he.durationMin + ' min' : ''}</span>
-            <a data-link href="/drama/${data.hero.dramaId}/episode/${he.id}" class="btn-primary">${PLAY} Watch</a>
-          </div>
-        </section>
-      </div>`);
-      if (data.hero.upNext.length) {
-        parts.push(`<div>
-          <h2 class="section-label">Continue this season</h2>
-          <div class="flex gap-3 overflow-x-auto pb-1">
-            ${data.hero.upNext.map((e) => `<a data-link href="/drama/${data.hero.dramaId}/episode/${e.id}" class="flex w-32 flex-none flex-col gap-1 no-underline text-fg">
-              <span class="flex h-20 items-end rounded-lg border-4 border-fg bg-raised p-2 text-small font-semibold">${e.locked ? `<span class="text-accent">${LOCK}</span>` : 'Ep ' + e.number}</span>
-              <span class="text-small">${esc(e.title)}</span>
-            </a>`).join('')}
-          </div>
-        </div>`);
-      }
+  function feedRowHtml(d, viewerName) {
+    var note;
+    if (d.note.kind === 'progress') {
+      var pct = Math.round(d.note.pct * 100);
+      note = '<div class="bar" style="margin-top:6px" aria-label="' + esc(d.note.text) + '"><i style="width:' + pct + '%"></i></div>';
+    } else if (d.note.kind === 'new') {
+      note = '<span class="chip">New episode</span>';
+    } else if (d.note.kind === 'others' || d.note.kind === 'finished') {
+      note = '<div class="sm tag">' + esc(d.note.text) + '</div>';
+    } else if (d.note.text) {
+      note = '<div class="sm muted">' + esc(d.note.text) + '</div>';
+    } else {
+      note = '';
+    }
+    var follow = d.following
+      ? '<button class="fol" data-follow="' + d.id + '" data-on="1">Following</button>'
+      : '<button class="btn-secondary" data-follow="' + d.id + '">Follow</button>';
+    return '<li class="list-row"><a href="#/drama/' + d.id + '" class="poster" style="background:' + posterColor(d.id) + ';display:block" aria-label="Open ' + esc(d.title) + '"></a>' +
+      '<a class="grow" href="#/drama/' + d.id + '" style="text-decoration:none;color:inherit">' +
+      '<div style="font-weight:600">' + esc(d.title) + '</div>' +
+      '<div class="sm muted">' + d.seasons + (d.seasons === 1 ? ' season, ' : ' seasons, ') + d.episodes + (d.episodes === 1 ? ' episode' : ' episodes') +
+      ' ' + labelChip(d.access_label) + '</div>' +
+      note + '</a>' + follow + '</li>';
+  }
+
+  function renderHome(data) {
+    var state = $('home-state');
+    state.hidden = true;
+    state.innerHTML = '';
+    var list = $('feed-list');
+
+    if (data.next) {
+      $('next-section').hidden = false;
+      heroHtml(data.next);
+      upcomingHtml(data.next);
+    } else {
+      $('next-section').hidden = true;
     }
 
-    parts.push('<div>');
-    parts.push('<h2 class="section-label">Drama feed</h2>');
+    var label = 'Drama feed' + (DEMO ? ' <span data-usernode-demo-note>(Staging demo)</span>' : '');
+    var labelEl = $('feed-label');
+    labelEl.innerHTML = label;
+    list.hidden = false;
+
     if (!data.dramas.length) {
-      parts.push(emptyState('No dramas yet', 'Add the first drama the homeroom will watch together.'));
-    } else {
-      parts.push(`<ul class="list">
-        ${data.dramas.map((d) => `<li class="list-row">
-          <a data-link href="/drama/${d.id}" class="flex min-w-0 grow items-center gap-3 no-underline text-fg">
-            <span class="h-12 w-12 flex-none rounded-md" style="${posterStyle(d.posterToken)}"></span>
-            <span class="flex min-w-0 grow flex-col gap-1">
-              <span class="font-semibold">${esc(d.title)}</span>
-              <span class="text-small text-muted">${d.seasonsCount} season${d.seasonsCount === 1 ? '' : 's'}, ${d.episodesCount} episode${d.episodesCount === 1 ? '' : 's'}${d.watchedCount ? ' · ' + d.watchedCount + ' watched' : ''}</span>
-              <span>${accessChip(d.accessLabel === 'VIP' ? 'vip' : (d.accessLabel === 'Free with ads' ? 'ads' : 'free'))}</span>
-            </span>
-          </a>
-          <button data-follow="${d.id}" data-following="${d.following ? '1' : ''}" class="btn-secondary ${d.following ? 'border-accent text-accent' : ''}">${d.following ? 'Following' : 'Follow'}</button>
-        </li>`).join('')}
-      </ul>`);
-    }
-    parts.push('</div>');
-
-    view.innerHTML = parts.join('');
-    bindAddDrama();
-    bindFollowButtons();
-  }
-
-  function bindAddDrama() {
-    const toggle = document.getElementById('add-drama-toggle');
-    const form = document.getElementById('add-drama-form');
-    if (!toggle || !form) return;
-    toggle.addEventListener('click', () => { form.hidden = !form.hidden; });
-    const save = document.getElementById('drama-save');
-    save.addEventListener('click', async () => {
-      const msg = document.getElementById('drama-error');
-      msg.hidden = true;
-      try {
-        const out = await api('/api/dramas', { method: 'POST', body: {
-          title: document.getElementById('drama-title').value,
-          description: document.getElementById('drama-desc').value,
-        } });
-        navigate('/drama/' + out.id);
-      } catch (err) {
-        msg.textContent = err.status === 401
-          ? 'Make an account to add a drama.'
-          : 'The drama could not be added. Check the title and try again.';
-        msg.hidden = false;
-      }
-    });
-  }
-
-  function bindFollowButtons() {
-    view.querySelectorAll('[data-follow]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const id = Number(btn.getAttribute('data-follow'));
-        const following = Boolean(btn.getAttribute('data-following'));
-        try {
-          await api('/api/follow', { method: 'POST', body: { dramaId: id, follow: !following } });
-          btn.setAttribute('data-following', following ? '' : '1');
-          btn.textContent = following ? 'Follow' : 'Following';
-          btn.classList.toggle('border-accent', !following);
-          btn.classList.toggle('text-accent', !following);
-        } catch (err) {
-          if (err.status === 401) { msg401(); return; }
-          console.warn('follow failed', err);
-        }
-      });
-    });
-  }
-
-  function msg401() {
-    const p = document.createElement('p');
-    p.className = 'text-small text-muted';
-    p.textContent = 'Make an account to continue.';
-    view.appendChild(p);
-  }
-
-  /* ── Drama detail ─────────────────────────────────────────────────────── */
-
-  async function viewDrama(sub, _seq, dramaId) {
-    let data;
-    try { data = await api('/api/dramas/' + dramaId); } catch (err) {
-      return renderError(err, err.status === 404 ? 'Drama not found' : 'The drama could not load');
-    }
-
-    const d = data.drama;
-    const parts = [];
-    parts.push(`<a data-link href="/" class="btn-secondary self-start">Back</a>
-    <section class="card flex gap-4">
-      <span class="h-20 w-20 flex-none rounded-lg" style="${posterStyle(d.posterToken)}"></span>
-      <div class="flex min-w-0 grow flex-col gap-1">
-        <h1 class="text-title">${esc(d.title)}</h1>
-        <p class="text-small text-muted">${esc(d.description || '')}${d.addedBy ? ' Added by ' + esc(d.addedBy) + '.' : ''}</p>
-        <button id="follow-btn" class="self-start ${data.following ? 'border-accent text-accent ' : ''}btn-secondary">${data.following ? 'Following' : 'Follow'}</button>
-      </div>
-    </section>
-    <h2 class="section-label">Episodes</h2>`);
-
-    if (!data.seasons.some((s) => s.episodes.length)) {
-      parts.push(emptyState('No episodes yet', 'Add the first episode with the button below.'));
-    } else {
-      data.seasons.forEach((s) => {
-        if (!s.episodes.length) return;
-        parts.push(`<div>
-          <h3 class="section-label">Season ${s.number}</h3>
-          <ul class="list">
-            ${s.episodes.map((e) => `<li class="list-row">
-              <a data-link href="/drama/${dramaId}/episode/${e.id}" class="flex min-w-0 grow items-center gap-3 no-underline text-fg">
-                <span class="flex h-10 w-14 flex-none items-center justify-center rounded-md border-2 bg-raised text-small font-semibold ${e.locked ? 'border-accent text-accent' : 'border-fg'}">${e.locked ? LOCK : 'Ep ' + e.number}</span>
-                <span class="flex min-w-0 grow flex-col">
-                  <span class="font-semibold">${esc(e.title)}</span>
-                  <span class="text-small text-muted">${e.durationMin ? e.durationMin + ' min' : ''}${e.watched ? ', watched' : ''}</span>
-                </span>
-              </a>
-              ${accessChip(e.access)}
-              ${e.locked ? '' : `<button data-toggle-watch="${e.id}" data-watched="${e.watched ? '1' : ''}" aria-label="${e.watched ? 'Mark unwatched' : 'Mark watched'}" class="flex h-11 w-11 flex-none items-center justify-center rounded-lg ${e.watched ? 'text-accent' : 'text-muted'}">${e.watched ? CHECKED : UNCHECKED}</button>`}
-            </li>`).join('')}
-          </ul>
-        </div>`);
-      });
-    }
-
-    parts.push(`<section id="add-episode-form" class="card flex flex-col gap-3" hidden>
-      <h2 class="text-heading">Add an episode</h2>
-      <label class="flex flex-col gap-1 text-small text-muted">Title
-        <input id="ep-title" class="field" placeholder="e.g. The Tide Table">
-      </label>
-      <label class="flex flex-col gap-1 text-small text-muted">Length in minutes
-        <input id="ep-duration" class="field" inputmode="numeric" placeholder="e.g. 52">
-      </label>
-      <label class="flex flex-col gap-1 text-small text-muted">Where to watch (optional link)
-        <input id="ep-url" class="field" placeholder="https:// (opens in a new tab)">
-      </label>
-      <label class="flex flex-col gap-1 text-small text-muted">Who can watch it
-        <select id="ep-access" class="field">
-          <option value="free">Free</option>
-          <option value="vip">VIP</option>
-          <option value="ads">Free with ads</option>
-        </select>
-      </label>
-      <p id="ep-error" class="text-small text-muted" hidden></p>
-      <button id="ep-save" class="btn-primary self-start">Add episode</button>
-    </section>
-    <button id="add-episode-toggle" class="btn-secondary self-start">${PLUS} Add episode</button>`);
-
-    view.innerHTML = parts.join('');
-
-    const followBtn = document.getElementById('follow-btn');
-    followBtn.addEventListener('click', async () => {
-      const following = !data.following;
-      try {
-        await api('/api/follow', { method: 'POST', body: { dramaId, follow: following } });
-        data.following = following;
-        followBtn.textContent = following ? 'Following' : 'Follow';
-        followBtn.classList.toggle('border-accent', following);
-        followBtn.classList.toggle('text-accent', following);
-      } catch (err) {
-        if (err.status === 401) { msg401(); return; }
-        console.warn('follow failed', err);
-      }
-    });
-
-    view.querySelectorAll('[data-toggle-watch]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const id = Number(btn.getAttribute('data-toggle-watch'));
-        const watched = Boolean(btn.getAttribute('data-watched'));
-        try {
-          if (watched) await api('/api/watch', { method: 'DELETE', body: { episodeId: id } });
-          else await api('/api/watch', { method: 'POST', body: { episodeId: id } });
-          render();
-        } catch (err) {
-          if (err.status === 401) { msg401(); return; }
-          if (err.status === 403) { render(); return; } // VIP lapsed server-side
-          console.warn('watch failed', err);
-        }
-      });
-    });
-
-    const epToggle = document.getElementById('add-episode-toggle');
-    const epForm = document.getElementById('add-episode-form');
-    epToggle.addEventListener('click', () => { epForm.hidden = !epForm.hidden; });
-    document.getElementById('ep-save').addEventListener('click', async () => {
-      const msg = document.getElementById('ep-error');
-      msg.hidden = true;
-      try {
-        await api('/api/episodes', { method: 'POST', body: {
-          dramaId,
-          title: document.getElementById('ep-title').value,
-          durationMin: Number(document.getElementById('ep-duration').value) || null,
-          watchUrl: document.getElementById('ep-url').value,
-          access: document.getElementById('ep-access').value,
-        } });
-        render();
-      } catch (err) {
-        msg.textContent = err.status === 401
-          ? 'Make an account to add an episode.'
-          : 'The episode could not be added. Check the fields and try again.';
-        msg.hidden = false;
-      }
-    });
-  }
-
-  /* ── Episode view: paywall, pre-roll ad, or watch card ─────────────────── */
-
-  const PERKS = ['No ads', 'Early access', 'HD and 4K', 'Offline download'];
-  const perkItem = (label) => `<li class="flex items-center gap-2 text-body"><span class="text-accent">${TICK}</span>${esc(label)}</li>`;
-
-  async function viewEpisode(sub, _seq, dramaId, episodeId) {
-    let data;
-    try { data = await api('/api/dramas/' + dramaId); } catch (err) {
-      return renderError(err, err.status === 404 ? 'Drama not found' : 'The episode could not load');
-    }
-    let ep = null;
-    data.seasons.forEach((s) => {
-      const found = s.episodes.find((e) => e.id === episodeId);
-      if (found) ep = found;
-    });
-    if (!ep) { view.innerHTML = errorState('Episode not found'); bindRetry(); return; }
-
-    if (ep.locked) {
-      // Server-side paywall: this payload has no watch URL and the server
-      // refuses the watch write for it.
-      view.innerHTML = `<a data-link href="/drama/${dramaId}" class="btn-secondary self-start">Back</a>
-      <section class="card flex flex-col items-start gap-3">
-        <span class="flex h-14 w-14 items-center justify-center rounded-full bg-accent/10 text-accent">${svg('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>', 'h-6 w-6')}</span>
-        <h1 class="text-heading">This episode is for VIP members</h1>
-        <p class="text-body text-muted">${esc(data.drama.title)} · Season ${ep.seasonNumber}, Episode ${ep.number}: ${esc(ep.title)}${ep.durationMin ? ' · ' + ep.durationMin + ' min' : ''}. Subscribe to watch it, or keep going with the free episodes.</p>
-        <ul class="flex flex-col gap-2">${PERKS.map(perkItem).join('')}</ul>
-        <a data-link href="/vip" class="btn-primary w-full">See VIP plans</a>
-        <p class="text-small text-muted">From Rp 59.000, cancel any time.</p>
-        <a data-link href="/drama/${dramaId}" class="btn-secondary w-full">Not now</a>
-      </section>`;
+      // The empty state stands alone: no feed label or empty bordered list
+      // around it, and the header's Add drama is hidden so the centred
+      // amber one is the only Add drama on the screen.
+      labelEl.hidden = true;
+      list.hidden = true;
+      list.innerHTML = '';
+      $('add-drama-btn').hidden = true;
+      state.hidden = false;
+      state.innerHTML =
+        '<div class="state-empty"><div class="text-heading">No dramas yet</div>' +
+        '<p class="text-small" style="color:rgb(var(--muted))">Add the first drama your group watches.</p>' +
+        '<button id="empty-add-drama" class="btn-primary">Add drama</button></div>';
+      $('empty-add-drama').addEventListener('click', function () { openAddDrama(); });
       return;
     }
+    labelEl.hidden = false;
+    $('add-drama-btn').hidden = false;
+    list.innerHTML = data.dramas.map(function (d) { return feedRowHtml(d, viewerName); }).join('');
+    Array.prototype.forEach.call(list.querySelectorAll('[data-follow]'), function (b) {
+      b.addEventListener('click', function () {
+        var on = b.getAttribute('data-on') === '1';
+        api('dramas/' + b.getAttribute('data-follow') + '/follow', { method: on ? 'DELETE' : 'PUT' })
+          .then(loadHome)
+          .catch(function () { loadHome(); });
+      });
+    });
+  }
 
-    const adSlot = ep.requiresAd
-      ? `<section id="ad-slot" class="card flex flex-col gap-3">
-          <span class="chip chip-soft self-start">Sponsored</span>
-          <div class="flex h-40 items-center justify-center rounded-lg bg-raised text-center text-small text-muted">An ad would play here. Your video starts in <span id="ad-count" class="mx-1 font-semibold">5</span>s</div>
-          <a data-link href="/vip" class="text-small font-medium text-accent underline">Go VIP to skip ads</a>
-        </section>`
+  function loadHome() {
+    var token = ++homeLoad;
+    renderHomeSkeleton();
+    api('feed').then(function (data) {
+      if (token !== homeLoad) return;
+      renderHome(data);
+    }).catch(function () {
+      if (token !== homeLoad) return;
+      renderHomeError();
+    });
+  }
+
+  function watchEpisode(ep, done) {
+    if (ep.locked) { showPaywall(ep); return; }
+    var go = function () {
+      api('episodes/' + ep.id + '/watched', { method: 'PUT' }).then(function () {
+        if (ep.watch_url) window.open(ep.watch_url, '_blank', 'noopener');
+        done();
+      }).catch(function (err) {
+        // The server refused a VIP episode (a lapsed subscription).
+        if (err.data && err.data.error === 'vip_required') { loadHome(); return; }
+        // A guest is asked for an account by the bridge; nothing to do here.
+        done();
+      });
+    };
+    if (ep.requiresAd) showAd(go); else go();
+  }
+
+  // ── A drama's page ──────────────────────────────────────────────────────
+
+  var dramaLoad = 0;
+  var currentDrama = null;   // the loaded /api/dramas/:id answer
+  var currentSeason = null;  // the season shown
+
+  function renderDramaSkeleton() {
+    $('drama-body').hidden = true;
+    var state = $('drama-state');
+    state.hidden = false;
+    var bar = function (w) { return '<div class="skeleton" style="height:12px;width:' + w + '"></div>'; };
+    var row = function () {
+      return '<li class="list-row"><div class="skeleton" style="width:56px;height:38px;border-radius:6px;flex:none"></div>' +
+        '<div class="grow" style="display:flex;flex-direction:column;gap:6px">' + bar('55%') + bar('35%') + '</div></li>';
+    };
+    state.innerHTML =
+      '<div style="display:flex;gap:16px;margin-bottom:8px"><div class="skeleton" style="width:72px;height:102px;border-radius:8px;flex:none"></div>' +
+      '<div class="grow" style="display:flex;flex-direction:column;gap:8px">' + bar('45%') + bar('80%') + '</div></div>' +
+      '<div class="skeleton" style="height:50px;border-radius:10px;margin-bottom:12px"></div>' +
+      '<ul class="list">' + row() + row() + row() + '</ul>';
+  }
+
+  function renderDramaError() {
+    $('drama-body').hidden = true;
+    var state = $('drama-state');
+    state.hidden = false;
+    state.innerHTML =
+      '<div class="state-error"><div class="text-body font-semibold">This drama could not be loaded</div>' +
+      '<p class="text-small" style="color:rgb(var(--muted))">Nothing you marked was lost. Check your connection and try again.</p>' +
+      '<button id="retry-drama" class="btn-secondary">Retry</button></div>';
+    $('retry-drama').addEventListener('click', function () { loadDrama(currentDramaId); });
+  }
+
+  function seasonProgressHtml(eps) {
+    var total = eps.length;
+    var watched = eps.filter(function (e) { return e.viewer_watched; }).length;
+    var pct = total ? Math.round((watched / total) * 100) : 0;
+    $('season-bar').style.width = pct + '%';
+    $('season-progress').textContent = total
+      ? watched + ' of ' + total + ' watched this season'
       : '';
-    const watchedLine = ep.watched ? '<span class="chip chip-vip">Watched</span>' : '';
-
-    view.innerHTML = `<a data-link href="/drama/${dramaId}" class="btn-secondary self-start">Back</a>
-    ${adSlot}
-    <section id="watch-slot" class="card flex flex-col gap-3" ${ep.requiresAd ? 'hidden' : ''}>
-      <h1 class="text-heading">Episode ${ep.number}: ${esc(ep.title)}</h1>
-      <p class="text-body text-muted">${esc(data.drama.title)} · Season ${ep.seasonNumber}${ep.durationMin ? ' · ' + ep.durationMin + ' min' : ''}</p>
-      ${watchedLine}
-      <button id="watch-btn" class="btn-primary self-start">${PLAY} ${ep.watched ? 'Watched — watch again' : 'Watch'}</button>
-      <p class="text-small text-muted">${ep.watchUrl ? 'Watch marks it watched and opens the episode page in a new tab.' : 'Watch marks it watched.'}</p>
-    </section>`;
-
-    if (ep.requiresAd) {
-      let left = 5;
-      const countEl = document.getElementById('ad-count');
-      timer = setInterval(() => {
-        left -= 1;
-        if (left <= 0) {
-          clearInterval(timer);
-          timer = null;
-          const ad = document.getElementById('ad-slot');
-          const slot = document.getElementById('watch-slot');
-          if (ad) ad.remove();
-          if (slot) slot.hidden = false;
-        } else if (countEl) {
-          countEl.textContent = String(left);
-        }
-      }, 1000);
-    }
-
-    const btn = document.getElementById('watch-btn');
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      try {
-        const out = await api('/api/watch', { method: 'POST', body: { episodeId } });
-        if (out.episode && out.episode.watchUrl) window.open(out.episode.watchUrl, '_blank', 'noopener');
-        render();
-      } catch (err) {
-        btn.disabled = false;
-        if (err.status === 403) { render(); return; } // paywall (subscription lapsed)
-        if (err.status === 401) { msg401(); return; }
-        console.warn('watch failed', err);
-      }
-    });
+    return watched < total ? eps.filter(function (e) { return !e.viewer_watched; })[0] : null;
   }
 
-  function bindRetry() {
-    const r = document.getElementById('retry');
-    if (r) r.addEventListener('click', () => render());
+  function epMeta(e) {
+    var parts = [];
+    if (e.minutes) parts.push(e.minutes + ' min');
+    var by = watchedBy(e.watched_by, viewerName);
+    if (by) parts.push('watched by ' + by);
+    return parts.join(', ');
   }
 
-  /* ── VIP page ─────────────────────────────────────────────────────────── */
-
-  const round100 = (n) => Math.round(n / 100) * 100;
-
-  async function viewVip(sub) {
-    let plansData;
-    try { plansData = await api('/api/plans'); } catch (err) { return renderError(err, 'The plans could not load'); }
-
-    const parts = [];
-    parts.push(`<section class="card flex flex-col gap-2">
-      <h1 class="text-title">HomeClip VIP</h1>
-      <p class="text-body text-muted">Watch everything, ad-free.</p>
-      <ul class="flex flex-col gap-2">${PERKS.map((p) => perkItem(p === 'Early access' ? 'Early access to new episodes' : (p === 'No ads' ? 'No ads on any episode' : p))).join('')}</ul>
-    </section>`);
-
-    if (sub.vip) {
-      parts.push(`<section class="card flex flex-col gap-2">
-        <div class="flex items-center gap-2"><span class="chip chip-vip">${LOCK}VIP</span><span class="font-semibold">You're a VIP member</span></div>
-        <p class="text-small text-muted">${esc(sub.plan ? sub.plan.name : '')} · ${sub.status === 'canceled' ? 'VIP until ' : 'Renews on '}${sub.renewalDate ? fmtDate(sub.renewalDate) : ''}</p>
-        <a data-link href="/vip/manage" class="btn-secondary self-start">Manage subscription</a>
-      </section>`);
-      view.innerHTML = parts.join('');
-      return;
+  function epRowHtml(e, nextEp) {
+    var isNext = nextEp && nextEp.id === e.id;
+    var scr = '<div class="scr' + (isNext ? ' next' : '') + '">' + e.number + '</div>';
+    var action;
+    if (isNext) {
+      action = '<button class="btn-primary" data-watch="' + e.id + '">' + svg('M7 5l12 7-12 7z') + 'Watch</button>';
+    } else if (e.viewer_watched) {
+      action = '<button class="check" data-watch="' + e.id + '" data-on="1" aria-label="Watched">' +
+        '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg></button>';
+    } else {
+      action = '<button class="check off" data-watch="' + e.id + '" aria-label="Mark watched">' +
+        '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg></button>';
     }
+    var meta = epMeta(e);
+    var chip = accessChip(e.access);
+    return '<li class="list-row"><button class="icon-btn" style="width:auto;height:auto;padding:0;border:0;background:none" data-open-episode="' + e.id + '" aria-label="Episode details">' + scr + '</button>' +
+      '<button class="grow" style="text-align:left;border:0;background:none;font:inherit;color:inherit;padding:0;min-height:44px" data-open-episode="' + e.id + '">' +
+      '<div style="font-weight:' + (isNext ? '600' : '500') + '">' + esc(e.title) + '</div>' +
+      (meta || chip ? '<div class="sm muted">' + esc(meta) + (meta && chip ? ' ' : '') + chip + '</div>' : '') +
+      '</button>' + action + '</li>';
+  }
 
-    let selected = 'monthly';
-    let coupon = null; // { code, discountIdr, amountIdr } after a successful Apply
+  function renderDrama(data) {
+    currentDrama = data;
+    $('drama-state').hidden = true;
+    $('drama-state').innerHTML = '';
+    $('drama-body').hidden = false;
 
-    const planById = (id) => plansData.plans.find((x) => x.id === id) || { priceIdr: 0 };
-    const subscribeLabel = () => 'Subscribe · ' + idr(coupon ? coupon.amountIdr : planById(selected).priceIdr);
+    $('drama-poster').style.background = posterColor(data.drama.id);
+    $('drama-title').textContent = data.drama.title;
+    var desc = (data.drama.synopsis ? data.drama.synopsis + ' ' : '') +
+      'Added by ' + data.drama.added_by_username;
+    $('drama-desc').textContent = desc;
+    var folBtn = $('drama-follow');
+    folBtn.textContent = data.following ? 'Following' : 'Follow';
+    folBtn.className = data.following ? 'fol' : 'btn-secondary';
+    $('remove-drama-btn').hidden = !data.drama.mine;
 
-    parts.push('<div>');
-    parts.push('<h2 class="section-label">Plans</h2>');
-    parts.push(`<div id="plans" class="flex flex-col gap-2">
-      ${plansData.plans.map((p) => {
-        const subtitle = p.id === 'monthly'
-          ? 'Billed every month'
-          : `${idr(round100(p.perMonthIdr))} per month${p.save ? ' · save ' + p.save + '%' : ''}`;
-        return `<button data-plan="${p.id}" class="flex items-center gap-3 rounded-xl border bg-surface p-4 text-left ${p.id === selected ? 'border-accent ring-2 ring-accent' : 'border-line'}">
-          <span class="h-5 w-5 flex-none rounded-full border-2 ${p.id === selected ? 'border-accent bg-accent' : 'border-line'}"></span>
-          <span class="flex min-w-0 grow flex-col">
-            <span class="font-semibold">${esc(p.name)}</span>
-            <span class="text-small text-muted">${esc(subtitle)}</span>
-          </span>
-          <span class="font-bold">${idr(p.priceIdr)}</span>
-        </button>`;
-      }).join('')}
-    </div>
-    <h2 class="section-label mt-4">Coupon</h2>
-    <div class="flex gap-2">
-      <input id="coupon" class="field" placeholder="e.g. STAGE10" aria-label="Coupon code">
-      <button id="coupon-apply" class="btn-secondary">Apply</button>
-    </div>
-    <p id="coupon-msg" class="text-small text-muted" hidden></p>
-    </div>
-    <div class="flex flex-col gap-2">
-      <button id="subscribe" class="btn-primary">${subscribeLabel()}</button>
-      ${plansData.paymentConfigured
-        ? `<p class="text-small text-muted">You'll finish payment on ${esc(providerName(plansData.provider))}'s secure page. No card details ever reach HomeClip.</p>`
-        : `<p class="text-small text-muted">Payment isn't set up in this environment yet, so subscribing is off for now. Plans and prices show as they will be.</p>`}
-    </div>`);
+    // The season control starts at the season of the viewer's next episode,
+    // else season 1.
+    if (currentSeason === null || data.seasons.indexOf(currentSeason) === -1) {
+      var nextEp = data.episodes.filter(function (e) { return !e.viewer_watched; })[0];
+      currentSeason = nextEp ? nextEp.season : (data.seasons[0] || 1);
+    }
+    drawSeasons(data);
+    drawEpisodes(data);
 
-    view.innerHTML = parts.join('');
-    if (!plansData.paymentConfigured) return;
-
-    view.querySelectorAll('[data-plan]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        selected = btn.getAttribute('data-plan');
-        coupon = null;
-        const msg = document.getElementById('coupon-msg');
-        msg.hidden = true;
-        view.querySelectorAll('[data-plan]').forEach((b) => {
-          const on = b.getAttribute('data-plan') === selected;
-          b.classList.toggle('border-accent', on);
-          b.classList.toggle('ring-2', on);
-          b.classList.toggle('ring-accent', on);
-          b.classList.toggle('border-line', !on);
-          const dot = b.querySelector('span');
-          dot.className = on
-            ? 'h-5 w-5 flex-none rounded-full border-2 border-accent bg-accent'
-            : 'h-5 w-5 flex-none rounded-full border-2 border-line';
+    $('drama-follow').onclick = function () {
+      var on = currentDrama.following;
+      api('dramas/' + currentDrama.drama.id + '/follow', { method: on ? 'DELETE' : 'PUT' })
+        .then(function (r) {
+          currentDrama.following = r.following;
+          folBtn.textContent = r.following ? 'Following' : 'Follow';
+          folBtn.className = r.following ? 'fol' : 'btn-secondary';
+        })
+        .catch(function (err) {
+          if (err.status !== 401) loadDrama(currentDramaId);
         });
-        document.getElementById('subscribe').textContent = subscribeLabel();
+    };
+    $('report-drama-btn').onclick = function () {
+      openReport({ drama_id: currentDrama.drama.id, name: currentDrama.drama.title });
+    };
+    $('remove-drama-btn').onclick = function () {
+      if (!window.confirm('Remove ' + currentDrama.drama.title + ' and its episodes?')) return;
+      api('dramas/' + currentDrama.drama.id, { method: 'DELETE' }).then(function () {
+        location.hash = '#/';
+      }).catch(function () {});
+    };
+    $('add-episode-btn').onclick = function () { openAddEpisode(); };
+  }
+
+  function drawSeasons(data) {
+    var seg = $('season-seg');
+    seg.innerHTML = data.seasons.length
+      ? data.seasons.map(function (s) {
+          return '<button data-season="' + s + '"' + (s === currentSeason ? ' class="on"' : '') + '>Season ' + s + '</button>';
+        }).join('')
+      : '';
+    Array.prototype.forEach.call(seg.querySelectorAll('[data-season]'), function (b) {
+      b.addEventListener('click', function () {
+        currentSeason = parseInt(b.getAttribute('data-season'), 10);
+        drawSeasons(currentDrama);
+        drawEpisodes(currentDrama);
       });
     });
-
-    document.getElementById('coupon-apply').addEventListener('click', async () => {
-      const msg = document.getElementById('coupon-msg');
-      msg.hidden = true;
-      try {
-        const out = await api('/api/coupon/validate', { method: 'POST', body: {
-          planId: selected, couponCode: document.getElementById('coupon').value,
-        } });
-        coupon = out;
-        msg.textContent = 'Coupon ' + out.code + ' applied — you pay ' + idr(out.amountIdr) + '.';
-        msg.hidden = false;
-      } catch (err) {
-        const words = {
-          coupon_invalid: "That code doesn't work.",
-          coupon_expired: 'That code has expired.',
-          coupon_used_up: "That code has no uses left.",
-        };
-        coupon = null;
-        msg.textContent = words[err.data && err.data.error] || "That code doesn't work.";
-        msg.hidden = false;
-      }
-      document.getElementById('subscribe').textContent = subscribeLabel();
-    });
-
-    document.getElementById('subscribe').addEventListener('click', async () => {
-      const btn = document.getElementById('subscribe');
-      btn.disabled = true;
-      try {
-        const out = await api('/api/checkout', { method: 'POST', body: {
-          planId: selected, couponCode: coupon ? coupon.code : '',
-        } });
-        window.location.href = out.url;
-      } catch (err) {
-        btn.disabled = false;
-        const msg = document.getElementById('coupon-msg');
-        msg.hidden = false;
-        if (err.status === 401 && err.data && err.data.error === 'account_required') {
-          msg.textContent = 'Make an account to subscribe.';
-        } else if (err.status === 503) {
-          msg.textContent = "Payment isn't set up in this environment yet.";
-        } else if (err.data && err.data.error === 'already_vip') {
-          render();
-          return;
-        } else {
-          msg.textContent = "The checkout could not start. Try again in a moment.";
-        }
-      }
-    });
   }
 
-  function providerName(id) {
-    return id === 'stripe' ? 'Stripe' : (id === 'midtrans' ? 'Midtrans' : (id === 'xendit' ? 'Xendit' : id));
-  }
-
-  /* ── Manage subscription ──────────────────────────────────────────────── */
-
-  async function viewManage(sub) {
-    const parts = [];
-    parts.push(`<a data-link href="/vip" class="btn-secondary self-start">Back</a>
-    <h1 class="text-title">Manage subscription</h1>`);
-
-    if (!sub.row && !sub.plan) {
-      parts.push(emptyState('No subscription yet', 'HomeClip VIP unlocks every episode and removes ads.',
-        '<a data-link href="/vip" class="btn-primary">See VIP plans</a>'));
-      view.innerHTML = parts.join('');
+  function drawEpisodes(data) {
+    var list = $('ep-list');
+    var eps = data.episodes.filter(function (e) { return e.season === currentSeason; });
+    if (!eps.length) {
+      list.innerHTML = '<li class="state-empty" style="list-style:none"><div class="text-body font-semibold">No episodes yet</div>' +
+        '<p class="text-small" style="color:rgb(var(--muted))">Add the first episode of this season.</p></li>';
+      $('add-episode-btn').classList.remove('btn-secondary');
+      $('add-episode-btn').classList.add('btn-primary');
+      $('season-bar').style.width = '0%';
+      $('season-progress').textContent = '';
       return;
     }
+    $('add-episode-btn').classList.add('btn-secondary');
+    $('add-episode-btn').classList.remove('btn-primary');
+    var nextEp = seasonProgressHtml(eps);
+    list.innerHTML = eps.map(function (e) { return epRowHtml(e, nextEp); }).join('');
+    Array.prototype.forEach.call(list.querySelectorAll('[data-watch]'), function (b) {
+      b.addEventListener('click', function () {
+        var ep = eps.filter(function (e) { return String(e.id) === b.getAttribute('data-watch'); })[0];
+        var on = b.getAttribute('data-on') === '1';
+        if (!on && ep.locked) { showPaywall(ep); return; }
+        var go = function () {
+          api('episodes/' + ep.id + '/watched', { method: on ? 'DELETE' : 'PUT' })
+            .then(loadDramaAgain)
+            .catch(function (err) {
+              if (err.status !== 401) loadDramaAgain();
+            });
+        };
+        if (!on && ep.requiresAd) showAd(go); else go();
+      });
+    });
+    Array.prototype.forEach.call(list.querySelectorAll('[data-open-episode]'), function (b) {
+      b.addEventListener('click', function () {
+        var ep = eps.filter(function (e) { return String(e.id) === b.getAttribute('data-open-episode'); })[0];
+        openEpisodeDetails(ep);
+      });
+    });
+  }
 
-    const kv = (label, value) => `<div class="flex items-center justify-between gap-3 border-b border-line py-2 last:border-b-0">
-      <span class="text-small text-muted">${esc(label)}</span><span class="text-body">${value}</span></div>`;
+  function loadDramaAgain() {
+    loadDrama(currentDramaId);
+  }
 
-    parts.push(`<section class="card flex flex-col">
-      ${kv('Status', statusChip(sub.status))}
-      ${kv('Plan', sub.plan ? `${esc(sub.plan.name)} · ${idr(sub.plan.priceIdr)}` : '—')}
-      ${sub.renewalDate ? kv(sub.status === 'canceled' ? 'VIP until' : 'Renews on', fmtDate(sub.renewalDate)) : ''}
-      ${sub.startedAt ? kv('Member since', fmtDate(sub.startedAt)) : ''}
-    </section>`);
+  var currentDramaId = null;
+  function loadDrama(id) {
+    currentDramaId = id;
+    var token = ++dramaLoad;
+    currentSeason = null;
+    renderDramaSkeleton();
+    api('dramas/' + id).then(function (data) {
+      if (token !== dramaLoad) return;
+      renderDrama(data);
+    }).catch(function () {
+      if (token !== dramaLoad) return;
+      renderDramaError();
+    });
+  }
 
+  // ── Sheets' contents ────────────────────────────────────────────────────
+
+  function openAddDrama() {
+    $('drama-title-input').value = '';
+    $('drama-desc-input').value = '';
+    $('add-drama-error').hidden = true;
+    showSheet('sheet-add-drama');
+    $('drama-title-input').focus();
+  }
+  $('add-drama-btn').addEventListener('click', openAddDrama);
+  $('save-drama').addEventListener('click', function () {
+    api('dramas', { method: 'POST', body: {
+      title: $('drama-title-input').value,
+      synopsis: $('drama-desc-input').value,
+    }}).then(function () {
+      hideSheet();
+      if (location.hash && location.hash !== '#/') location.hash = '#/';
+      else loadHome();
+    }).catch(function (err) {
+      if (err.status === 401) { hideSheet(); return; }
+      var p = $('add-drama-error');
+      p.textContent = err.message;
+      p.hidden = false;
+    });
+  });
+
+  function openAddEpisode() {
+    if (!currentDrama) return;
+    // Season starts at the season you are looking at; the episode number at
+    // the next free one.
+    var inSeason = currentDrama.episodes.filter(function (e) { return e.season === currentSeason; });
+    var nextNumber = inSeason.reduce(function (m, e) { return Math.max(m, e.number); }, 0) + 1;
+    $('ep-season-input').value = currentSeason;
+    $('ep-number-input').value = nextNumber;
+    $('ep-title-input').value = '';
+    $('ep-minutes-input').value = '';
+    $('ep-url-input').value = '';
+    $('ep-access-input').value = 'free';
+    $('add-episode-error').hidden = true;
+    showSheet('sheet-add-episode');
+    $('ep-title-input').focus();
+  }
+  $('save-episode').addEventListener('click', function () {
+    api('dramas/' + currentDramaId + '/episodes', { method: 'POST', body: {
+      season: $('ep-season-input').value,
+      number: $('ep-number-input').value,
+      title: $('ep-title-input').value,
+      minutes: $('ep-minutes-input').value || null,
+      watch_url: $('ep-url-input').value || null,
+      access: $('ep-access-input').value,
+    }}).then(function () {
+      hideSheet();
+      loadDramaAgain();
+    }).catch(function (err) {
+      if (err.status === 401) { hideSheet(); return; }
+      var p = $('add-episode-error');
+      p.textContent = err.message;
+      p.hidden = false;
+    });
+  });
+
+  function openEpisodeDetails(ep) {
+    $('episode-detail-title').textContent = 'Season ' + ep.season + ', Episode ' + ep.number + ': ' + ep.title;
+    $('episode-detail-meta').textContent =
+      (ep.minutes ? ep.minutes + ' min, ' : '') + 'added by ' + ep.added_by_username;
+    var by = watchedBy(ep.watched_by, viewerName);
+    $('episode-detail-watchers').textContent = by ? 'Watched by ' + by : 'Not watched yet';
+    $('episode-detail-access').innerHTML = accessChip(ep.access);
+    var link = $('episode-detail-link');
+    if (ep.watch_url) {
+      link.href = ep.watch_url;
+      link.textContent = ep.watch_url;
+      link.hidden = false;
+    } else {
+      link.hidden = true;
+    }
+    $('remove-episode-btn').hidden = !ep.mine;
+    $('remove-episode-btn').onclick = function () {
+      if (!window.confirm('Remove this episode?')) return;
+      hideSheet();
+      api('episodes/' + ep.id, { method: 'DELETE' }).then(loadDramaAgain).catch(function () {});
+    };
+    $('report-episode-btn').onclick = function () {
+      openReport({ episode_id: ep.id, name: ep.title });
+    };
+    showSheet('sheet-episode');
+  }
+
+  function openReport(target) {
+    $('report-context').textContent = 'Report ' + target.name + ' to the group' + "'s admins. Nothing is hidden automatically.";
+    $('report-reason').value = '';
+    $('report-error').hidden = true;
+    $('send-report').onclick = function () {
+      api('reports', { method: 'POST', body: {
+        drama_id: target.drama_id || null,
+        episode_id: target.episode_id || null,
+        reason: $('report-reason').value || null,
+      }}).then(function () {
+        hideSheet();
+      }).catch(function (err) {
+        if (err.status === 401) { hideSheet(); return; }
+        var p = $('report-error');
+        p.textContent = err.message;
+        p.hidden = false;
+      });
+    };
+    showSheet('sheet-report');
+  }
+
+  // ── VIP: plans, subscription, payment history ─────────────────────────
+  // The client renders what the server decides: VIP status comes from
+  // /api/me/subscription and locked episodes arrive without a watch link.
+
+  function idr(n) {
+    return 'Rp ' + String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  }
+  function fmtDate(iso) {
+    return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+  var LOCK_ICON = '<svg viewBox="0 0 24 24" style="width:14px;height:14px"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
+  var TICK_ICON = '<svg viewBox="0 0 24 24" style="width:18px;height:18px;color:rgb(var(--accent))"><path d="M5 12l4 4L19 6"/></svg>';
+  var PERKS = ['No ads on any episode', 'Early access to new episodes', 'HD and 4K', 'Offline download'];
+  var PLAN_NAMES = { monthly: 'Monthly', quarterly: '3 Months', yearly: 'Yearly' };
+  var METHOD_LABELS = { card: 'Card', ewallet: 'E-wallet', bank_transfer: 'Bank transfer', qr: 'QR' };
+
+  function accessChip(access) {
+    if (access === 'vip') return '<span class="chip chip-vip">' + LOCK_ICON + 'VIP</span>';
+    if (access === 'ads') return '<span class="chip chip-soft">Free with ads</span>';
+    return '';
+  }
+  function labelChip(label) {
+    if (label === 'VIP') return accessChip('vip');
+    if (label === 'Free with ads') return accessChip('ads');
+    return '';
+  }
+  function statusChip(status) {
+    if (status === 'active') return '<span class="chip chip-vip">Active</span>';
+    return '<span class="chip chip-soft">' + (status === 'canceled' ? 'Canceled' : 'Expired') + '</span>';
+  }
+  function paymentChip(status) {
+    var label = { paid: 'Paid', pending: 'Pending', failed: 'Failed', refunded: 'Refunded' }[status] || status;
+    return '<span class="chip ' + (status === 'paid' ? 'chip-vip' : 'chip-soft') + '">' + esc(label) + '</span>';
+  }
+  function providerName(id) {
+    return { stripe: 'Stripe', midtrans: 'Midtrans', xendit: 'Xendit' }[id] || id;
+  }
+  function perkList() {
+    return '<ul style="list-style:none;padding:0;margin:8px 0;display:flex;flex-direction:column;gap:8px">' +
+      PERKS.map(function (p) { return '<li style="display:flex;align-items:center;gap:8px">' + TICK_ICON + esc(p) + '</li>'; }).join('') +
+      '</ul>';
+  }
+  function vipLink(href, label, cls) {
+    return '<a href="' + href + '" class="' + cls + '" style="text-decoration:none">' + label + '</a>';
+  }
+
+  var vipLoadSeq = 0;
+
+  function vipSkeleton() {
+    var bar = function (w) { return '<div class="skeleton" style="height:12px;width:' + w + '"></div>'; };
+    var row = '<li class="list-row"><div class="skeleton" style="width:20px;height:20px;border-radius:99px;flex:none"></div>' +
+      '<div class="grow" style="display:flex;flex-direction:column;gap:6px">' + bar('45%') + bar('30%') + '</div></li>';
+    $('vip-body').innerHTML = '<ul class="list" aria-hidden="true">' + row + row + row + '</ul>';
+  }
+
+  function vipError(what, onRetry) {
+    $('vip-body').innerHTML =
+      '<div class="state-error"><div class="text-body font-semibold">' + esc(what) + '</div>' +
+      '<p class="text-small" style="color:rgb(var(--muted))">You can retry. Nothing else in the app is affected.</p>' +
+      '<button id="vip-retry" class="btn-secondary">Retry</button></div>';
+    $('vip-retry').addEventListener('click', onRetry);
+  }
+
+  function vipEmpty(title, detail, linkHtml) {
+    return '<div class="state-empty"><div class="text-body font-semibold">' + esc(title) + '</div>' +
+      '<p class="text-small" style="color:rgb(var(--muted))">' + esc(detail) + '</p>' + (linkHtml || '') + '</div>';
+  }
+
+  function renewalLine(sub) {
+    return esc(sub.plan ? sub.plan.name : '') + ' · ' + (sub.status === 'canceled' ? 'VIP until ' : 'Renews on ') +
+      (sub.renewalDate ? fmtDate(sub.renewalDate) : '');
+  }
+
+  function loadVip(kind) {
+    var token = ++vipLoadSeq;
+    vipSkeleton();
+    var titles = { vip: 'HomeClip VIP', manage: 'Manage subscription', payments: 'Payment history', ret: 'HomeClip VIP' };
+    $('vip-title').textContent = titles[kind];
+    $('vip-back').onclick = function () {
+      if (kind === 'payments') location.hash = '#/vip/manage';
+      else if (kind === 'manage') location.hash = '#/vip';
+      else location.hash = '#/';
+    };
+    var retry = function () { loadVip(kind); };
+    var done = function (fn) { return function (data) { if (token === vipLoadSeq) fn(data); }; };
+    var failed = function (what) { return function () { if (token === vipLoadSeq) vipError(what, retry); }; };
+
+    if (kind === 'payments') {
+      api('payments').then(done(renderPayments)).catch(failed('The payment history could not load'));
+    } else if (kind === 'ret') {
+      renderReturn(token);
+    } else {
+      api('me/subscription').then(function (sub) {
+        if (token !== vipLoadSeq) return;
+        if (kind === 'manage') return renderManage(sub);
+        return api('plans').then(done(function (plans) { renderVip(sub, plans); }))
+          .catch(failed('The plans could not load'));
+      }).catch(failed('Your subscription could not load'));
+    }
+  }
+
+  function renderVip(sub, plansData) {
+    var body = $('vip-body');
+    var html = '<div class="hero"><div class="h">Watch everything, ad-free</div>' + perkList() + '</div>';
+    if (sub.vip) {
+      body.innerHTML = html +
+        '<div class="hero" style="margin-top:12px"><div style="display:flex;align-items:center;gap:8px">' + accessChip('vip') +
+        '<span style="font-weight:600">You are a VIP member</span></div>' +
+        '<p class="sm muted" style="margin:6px 0 10px">' + renewalLine(sub) + '</p>' +
+        vipLink('#/vip/manage', 'Manage subscription', 'btn-secondary') + '</div>';
+      return;
+    }
+    var selected = 'monthly';
+    var coupon = null; // { code, discountIdr, amountIdr } after a successful Apply
+    var planById = function (id) { return plansData.plans.filter(function (p) { return p.id === id; })[0] || { priceIdr: 0 }; };
+    var subscribeLabel = function () { return 'Subscribe · ' + idr(coupon ? coupon.amountIdr : planById(selected).priceIdr); };
+    var plansHtml = function () {
+      return plansData.plans.map(function (p) {
+        var on = p.id === selected;
+        var sub2 = p.id === 'monthly' ? 'Billed every month'
+          : idr(Math.round(p.perMonthIdr / 100) * 100) + ' per month' + (p.save ? ' · save ' + p.save + '%' : '');
+        return '<button data-plan="' + p.id + '" class="hero" style="display:flex;align-items:center;gap:12px;text-align:left;font:inherit;color:inherit;' +
+          (on ? 'border-color:rgb(var(--accent));box-shadow:0 0 0 2px rgb(var(--accent))' : '') + '">' +
+          '<span style="width:20px;height:20px;flex:none;border-radius:99px;border:2px solid rgb(var(--' + (on ? 'accent' : 'line') + ');background:' + (on ? 'rgb(var(--accent))' : 'none') + '"></span>' +
+          '<span class="grow"><span style="font-weight:600;display:block">' + esc(p.name) + '</span><span class="sm muted">' + esc(sub2) + '</span></span>' +
+          '<span style="font-weight:700">' + idr(p.priceIdr) + '</span></button>';
+      }).join('');
+    };
+    body.innerHTML = html +
+      '<div class="section-label">Plans</div><div id="vip-plans" style="display:flex;flex-direction:column;gap:8px">' + plansHtml() + '</div>' +
+      '<label class="section-label" for="vip-coupon">Coupon</label>' +
+      '<div style="display:flex;gap:8px"><input id="vip-coupon" class="field" placeholder="e.g. STAGE10" autocomplete="off">' +
+      '<button id="vip-coupon-apply" class="btn-secondary">Apply</button></div>' +
+      '<p id="vip-msg" class="sm muted" style="margin-top:8px" hidden></p>' +
+      '<div style="margin-top:16px;display:flex;flex-direction:column;gap:8px">' +
+      '<button id="vip-subscribe" class="btn-primary">' + esc(subscribeLabel()) + '</button>' +
+      (plansData.paymentConfigured
+        ? '<p class="sm muted">You will finish payment on ' + esc(providerName(plansData.provider)) + '\'s secure page. No card details ever reach HomeClip.</p>'
+        : '<p class="sm muted">Payment is not set up in this environment yet, so subscribing is off for now. Plans and prices show as they will be.</p>') +
+      '</div>';
+    var msg = $('vip-msg');
+    var say = function (t) { msg.textContent = t; msg.hidden = !t; };
+    var subscribe = $('vip-subscribe');
+    if (!plansData.paymentConfigured) { subscribe.disabled = true; return; }
+    var bindPlans = function () {
+      Array.prototype.forEach.call(body.querySelectorAll('[data-plan]'), function (b) {
+        b.addEventListener('click', function () {
+          selected = b.getAttribute('data-plan');
+          coupon = null;
+          say('');
+          $('vip-plans').innerHTML = plansHtml();
+          bindPlans();
+          subscribe.textContent = subscribeLabel();
+        });
+      });
+    };
+    bindPlans();
+    $('vip-coupon-apply').addEventListener('click', function () {
+      api('coupon/validate', { method: 'POST', body: { planId: selected, couponCode: $('vip-coupon').value } })
+        .then(function (out) {
+          coupon = out;
+          say('Coupon ' + out.code + ' applied. You pay ' + idr(out.amountIdr) + '.');
+        })
+        .catch(function (err) {
+          var code = err.data && err.data.error;
+          coupon = null;
+          say(code === 'expired' ? 'That code has expired.' : code === 'used_up' ? 'That code has no uses left.' : 'That code does not work.');
+        })
+        .then(function () { subscribe.textContent = subscribeLabel(); });
+    });
+    subscribe.addEventListener('click', function () {
+      subscribe.disabled = true;
+      api('checkout', { method: 'POST', body: { planId: selected, couponCode: coupon ? coupon.code : '' } })
+        .then(function (out) { window.location.href = out.url; })
+        .catch(function (err) {
+          subscribe.disabled = false;
+          var code = err.data && err.data.error;
+          if (err.status === 401) say('Make an account to subscribe.');
+          else if (code === 'already_vip') loadVip('vip');
+          else if (err.status === 503) say('Payment is not set up in this environment yet.');
+          else say('The checkout could not start. Try again in a moment.');
+        });
+    });
+  }
+
+  function renderManage(sub) {
+    var body = $('vip-body');
+    if (!sub.plan) {
+      body.innerHTML = vipEmpty('No subscription yet', 'HomeClip VIP unlocks every episode and removes ads.',
+        vipLink('#/vip', 'See VIP plans', 'btn-primary'));
+      return;
+    }
+    var kv = function (label, value) {
+      return '<div class="list-row" style="justify-content:space-between"><span class="sm muted">' + esc(label) + '</span><span>' + value + '</span></div>';
+    };
+    var html = '<ul class="list" style="list-style:none">' +
+      kv('Status', statusChip(sub.status)) +
+      kv('Plan', esc(sub.plan.name) + ' · ' + idr(sub.plan.priceIdr)) +
+      (sub.renewalDate ? kv(sub.status === 'canceled' ? 'VIP until' : 'Renews on', fmtDate(sub.renewalDate)) : '') +
+      (sub.startedAt ? kv('Member since', fmtDate(sub.startedAt)) : '') + '</ul>';
+    html += '<div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;align-items:flex-start">';
     if (sub.canCancel) {
-      parts.push(`<button id="cancel" class="btn-secondary">Cancel subscription</button>
-      <p class="text-small text-muted">Cancel any time. You keep VIP until ${sub.renewalDate ? fmtDate(sub.renewalDate) : 'the renewal date'}.</p>`);
+      html += '<button id="vip-cancel" class="btn-secondary">Cancel subscription</button>' +
+        '<p class="sm muted">Cancel any time. You keep VIP until ' + (sub.renewalDate ? fmtDate(sub.renewalDate) : 'the renewal date') + '.</p>';
     }
     if (sub.canResume) {
-      parts.push(`<button id="resume" class="btn-primary">Resume</button>
-      <p class="text-small text-muted">Resuming keeps your plan renewing on ${sub.renewalDate ? fmtDate(sub.renewalDate) : ''}.</p>`);
+      html += '<button id="vip-resume" class="btn-primary">Resume</button>' +
+        '<p class="sm muted">Resuming keeps your plan renewing on ' + (sub.renewalDate ? fmtDate(sub.renewalDate) : '') + '.</p>';
     }
-    if (sub.status === 'expired') {
-      parts.push(`<a data-link href="/vip" class="btn-primary self-start">Subscribe again</a>`);
-    }
-
-    parts.push(`<a data-link href="/vip/payments" class="text-small font-medium text-accent underline">Payment history</a>`);
-
-    view.innerHTML = parts.join('');
-
-    const cancelBtn = document.getElementById('cancel');
-    if (cancelBtn) {
-      cancelBtn.addEventListener('click', async () => {
-        cancelBtn.disabled = true;
-        try { await api('/api/subscription/cancel', { method: 'POST', body: {} }); render(); }
-        catch (err) { cancelBtn.disabled = false; console.warn('cancel failed', err); }
+    if (sub.status === 'expired') html += vipLink('#/vip', 'Subscribe again', 'btn-primary');
+    html += vipLink('#/vip/payments', 'Payment history', 'btn-secondary') + '</div>';
+    body.innerHTML = html;
+    var act = function (id, path) {
+      var b = $(id);
+      if (!b) return;
+      b.addEventListener('click', function () {
+        b.disabled = true;
+        api(path, { method: 'POST', body: {} }).then(function () { loadVip('manage'); })
+          .catch(function () { b.disabled = false; });
       });
-    }
-    const resumeBtn = document.getElementById('resume');
-    if (resumeBtn) {
-      resumeBtn.addEventListener('click', async () => {
-        resumeBtn.disabled = true;
-        try { await api('/api/subscription/resume', { method: 'POST', body: {} }); render(); }
-        catch (err) { resumeBtn.disabled = false; console.warn('resume failed', err); }
-      });
-    }
+    };
+    act('vip-cancel', 'subscription/cancel');
+    act('vip-resume', 'subscription/resume');
   }
 
-  /* ── Payment history ──────────────────────────────────────────────────── */
-
-  const METHOD_LABEL = { card: 'Card', ewallet: 'E-wallet', bank_transfer: 'Bank transfer', qr: 'QR' };
-
-  async function viewPayments() {
-    let data;
-    try { data = await api('/api/payments'); } catch (err) { return renderError(err, 'The payment history could not load'); }
-
-    const parts = [];
-    parts.push(`<a data-link href="/vip/manage" class="btn-secondary self-start">Back</a>
-    <h1 class="text-title">Payment history</h1>`);
+  function renderPayments(data) {
     if (!data.payments.length) {
-      parts.push(emptyState('No payments yet', 'Charges for HomeClip VIP appear here once you subscribe.',
-        '<a data-link href="/vip" class="btn-primary">See VIP plans</a>'));
-    } else {
-      parts.push(`<ul class="list">
-        ${data.payments.map((p) => `<li class="list-row">
-          <div class="flex min-w-0 grow flex-col">
-            <span class="font-semibold">${fmtDate(p.createdAt)} · ${esc((PLANS_NAME[p.planId]) || p.planId)}</span>
-            <span class="text-small text-muted">${esc(METHOD_LABEL[p.method] || p.method)} · ${esc(providerName(p.provider))}${p.couponCode ? ' · coupon ' + esc(p.couponCode) : ''}</span>
-          </div>
-          <span class="font-semibold">${idr(p.amountIdr)}</span>
-          ${paymentStatusChip(p.status)}
-        </li>`).join('')}
-      </ul>
-      <p class="text-small text-muted">Charges are handled by ${esc(providerName(data.providerLabel || 'stripe'))}. HomeClip never sees or stores card numbers.</p>`);
+      $('vip-body').innerHTML = vipEmpty('No payments yet', 'Charges for HomeClip VIP appear here once you subscribe.',
+        vipLink('#/vip', 'See VIP plans', 'btn-primary'));
+      return;
     }
-    view.innerHTML = parts.join('');
+    $('vip-body').innerHTML = '<ul class="list">' + data.payments.map(function (p) {
+      return '<li class="list-row"><div class="grow"><div style="font-weight:600">' + fmtDate(p.createdAt) + ' · ' + esc(PLAN_NAMES[p.planId] || p.planId) + '</div>' +
+        '<div class="sm muted">' + esc(METHOD_LABELS[p.method] || p.method) + ' · ' + esc(providerName(p.provider)) +
+        (p.couponCode ? ' · coupon ' + esc(p.couponCode) : '') + '</div></div>' +
+        '<span style="font-weight:600">' + idr(p.amountIdr) + '</span>' + paymentChip(p.status) + '</li>';
+    }).join('') + '</ul>' +
+      '<p class="sm muted" style="margin-top:8px">HomeClip never sees or stores card numbers.</p>';
   }
 
-  const PLANS_NAME = { monthly: 'Monthly', quarterly: '3 Months', yearly: 'Yearly' };
-
-  /* ── Return from checkout ─────────────────────────────────────────────── */
-
-  async function viewReturn() {
-    const sessionId = new URLSearchParams(location.search).get('session_id');
-    view.innerHTML = `<p class="text-small text-muted">Finishing your payment…</p>`;
+  // Stripe sends the browser back to /vip/return?session_id=…; the server
+  // asks Stripe about the session before anything unlocks.
+  function renderReturn(token) {
+    var sessionId = new URLSearchParams(location.search).get('session_id');
+    var body = $('vip-body');
     if (!sessionId) {
-      view.innerHTML = errorState('We could not find the payment session', 'Check payment history in a moment, or go back to the VIP page.');
-      view.innerHTML += '<a data-link href="/vip" class="btn-secondary self-start">Back to VIP</a>';
+      vipError('We could not find the payment session', function () { location.hash = '#/vip'; });
       return;
     }
-    let sub;
-    try {
-      sub = await api('/api/checkout/confirm?session_id=' + encodeURIComponent(sessionId));
-    } catch (err) {
-      view.innerHTML = errorState('The payment could not be confirmed yet', 'If you completed payment, check Payment history in a moment — the confirmation can take a minute.') +
-        '<a data-link href="/vip/manage" class="btn-secondary self-start">Manage subscription</a>';
-      return;
-    }
-    if (sub.vip) {
-      view.innerHTML = `<section class="card flex flex-col items-start gap-3">
-        <span class="chip chip-vip">${LOCK}VIP</span>
-        <h1 class="text-heading">You're a VIP member</h1>
-        <p class="text-body text-muted">${esc(sub.plan ? sub.plan.name : '')} · ${sub.status === 'canceled' ? 'VIP until ' : 'Renews on '}${sub.renewalDate ? fmtDate(sub.renewalDate) : ''}. Every episode is unlocked and ads are gone.</p>
-        <a data-link href="/" class="btn-primary self-start">Start watching</a>
-        <a data-link href="/vip/manage" class="btn-secondary self-start">Manage subscription</a>
-      </section>`;
-    } else {
-      view.innerHTML = errorState('Your payment is still processing', 'Once it completes, your subscription activates and VIP unlocks automatically.') +
-        '<a data-link href="/vip/payments" class="btn-secondary self-start">Payment history</a>';
-    }
-  }
-
-  /* ── Router ───────────────────────────────────────────────────────────── */
-
-  async function render() {
-    renderSeq += 1;
-    const seq = renderSeq;
-    if (timer) { clearInterval(timer); timer = null; }
-    view.innerHTML = skeletonList();
-    window.scrollTo(0, 0);
-
-    const path = location.pathname;
-    let sub;
-    try { sub = await api('/api/me/subscription'); } catch { sub = { vip: false, status: 'expired', plan: null, renewalDate: null, startedAt: null, canCancel: false, canResume: false }; }
-    if (seq !== renderSeq) return;
-    updateHeader(sub);
-
-    let m;
-    try {
-      if (path === '/') await viewHome(sub);
-      else if ((m = path.match(/^\/drama\/(\d+)$/))) await viewDrama(sub, seq, Number(m[1]));
-      else if ((m = path.match(/^\/drama\/(\d+)\/episode\/(\d+)$/))) await viewEpisode(sub, seq, Number(m[1]), Number(m[2]));
-      else if (path === '/vip') await viewVip(sub);
-      else if (path === '/vip/manage') await viewManage(sub);
-      else if (path === '/vip/payments') await viewPayments();
-      else if (path === '/vip/return') await viewReturn();
-      else {
-        view.innerHTML = emptyState('Page not found', 'That address does not exist in HomeClip.',
-          '<a data-link href="/" class="btn-primary">Back home</a>');
+    body.innerHTML = '<p class="sm muted">Finishing your payment…</p>';
+    api('checkout/confirm?session_id=' + encodeURIComponent(sessionId)).then(function (sub) {
+      if (token !== vipLoadSeq) return;
+      if (sub.vip) {
+        body.innerHTML = '<div class="hero">' + accessChip('vip') +
+          '<div class="h" style="margin-top:8px">You are a VIP member</div>' +
+          '<p class="sm muted" style="margin:6px 0 12px">' + renewalLine(sub) + '. Every episode is unlocked and ads are gone.</p>' +
+          '<div style="display:flex;gap:8px">' + vipLink('#/', 'Start watching', 'btn-primary') +
+          vipLink('#/vip/manage', 'Manage subscription', 'btn-secondary') + '</div></div>';
+      } else {
+        body.innerHTML = vipEmpty('Your payment is still processing', 'Once it completes, your subscription activates and VIP unlocks automatically.',
+          vipLink('#/vip/payments', 'Payment history', 'btn-secondary'));
       }
-    } catch (err) {
-      if (seq !== renderSeq) return;
-      console.warn('view failed', err);
-      renderError(err);
-    }
+    }).catch(function () {
+      if (token !== vipLoadSeq) return;
+      body.innerHTML = vipEmpty('The payment could not be confirmed yet',
+        'If you completed payment, check Payment history in a moment. The confirmation can take a minute.',
+        vipLink('#/vip/manage', 'Manage subscription', 'btn-secondary'));
+    });
   }
 
-  render();
+  // ── Paywall and pre-roll ad ───────────────────────────────────────────
+
+  function showPaywall(ep) {
+    $('paywall-detail').textContent = 'Season ' + ep.season + ', Episode ' + ep.number + ': ' + ep.title +
+      '. Subscribe to watch it, or keep going with the free episodes.';
+    showSheet('sheet-paywall');
+  }
+
+  var adTimer = null;
+  // Free-with-ads episodes show a pre-roll placeholder first; VIP never gets
+  // requiresAd. `go` runs once the countdown ends.
+  function showAd(go) {
+    var left = 5;
+    $('ad-count').textContent = String(left);
+    showSheet('sheet-ad');
+    clearInterval(adTimer);
+    adTimer = setInterval(function () {
+      left -= 1;
+      if (left <= 0) {
+        clearInterval(adTimer);
+        adTimer = null;
+        hideSheet();
+        go();
+      } else {
+        $('ad-count').textContent = String(left);
+      }
+    }, 1000);
+  }
+
+  // ── Routing ─────────────────────────────────────────────────────────────
+
+  // The hash carries the route; Stripe's return lands on the path
+  // /vip/return with no hash.
+  function routeKey() {
+    return location.hash && location.hash !== '#' ? location.hash.slice(1) : location.pathname;
+  }
+
+  function route() {
+    var key = routeKey();
+    var drama = key.match(/^\/drama\/(\d+)$/);
+    var vip = key.match(/^\/vip(?:\/(manage|payments|return))?\/?$/);
+    $('view-home').hidden = !!(drama || vip);
+    $('view-drama').hidden = !drama;
+    $('view-vip').hidden = !vip;
+    hideSheet();
+    window.scrollTo(0, 0);
+    if (drama) {
+      loadDrama(drama[1]);
+    } else if (vip) {
+      loadVip(vip[1] === 'return' ? 'ret' : (vip[1] || 'vip'));
+    } else {
+      currentSeason = null;
+      loadHome();
+    }
+  }
+  window.addEventListener('hashchange', route);
+  $('back-btn').addEventListener('click', function () {
+    if (history.length > 1) history.back();
+    else location.hash = '#/';
+  });
+
+  // ── Boot ────────────────────────────────────────────────────────────────
+
+  // The skeleton shows while /api/me is still pending too, not only while
+  // the feed request is: route() (which calls loadHome) waits for it.
+  if (routeKey() === '/') renderHomeSkeleton();
+
+  api('me').then(function (me) {
+    viewerName = me.user ? me.user.username : null;
+    isGuest = !!me.guest;
+    if (!me.user) $('add-drama-btn').disabled = true;
+    route();
+  }).catch(function () {
+    route();
+  });
 })();

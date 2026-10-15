@@ -28,42 +28,12 @@
     "preset": "you_or_the_group"
   },
   "tests": [
-    {
-      "id": "home.feed",
-      "name": "Home feed with access chips",
-      "path": "/",
-      "expectSelector": ".list",
-      "visual": true,
-      "impact": ["public/**", "server.js", "styles/**", "providers/**"]
-    },
-    {
-      "name": "Drama detail renders",
-      "path": "/drama/1",
-      "expectText": "Episodes"
-    },
-    {
-      "name": "VIP episode shows paywall to free users",
-      "path": "/drama/1/episode/6",
-      "expectText": "This episode is for VIP members"
-    },
-    {
-      "id": "vip.page",
-      "name": "VIP page with IDR plans",
-      "path": "/vip",
-      "expectText": "Rp 59.000",
-      "visual": true,
-      "impact": ["public/**", "server.js", "styles/**", "providers/**"]
-    },
-    {
-      "name": "Manage subscription renders",
-      "path": "/vip/manage",
-      "expectText": "Manage subscription"
-    },
-    {
-      "name": "Payment history renders",
-      "path": "/vip/payments",
-      "expectText": "Payment history"
-    }
+    { "name": "Feed empty state", "path": "/", "expectText": "No dramas yet" },
+    { "id": "demo-feed", "name": "Populated demo", "path": "/?demo=1", "expectText": "The Tide Table", "visual": true, "impact": ["public/**", "styles/**"] },
+    { "name": "Drama page", "path": "/?demo=1#/drama/900001", "expectText": "Season 2" },
+    { "id": "vip.page", "name": "VIP page with IDR plans", "path": "/#/vip", "expectText": "Rp 59.000", "visual": true, "impact": ["public/**", "server.js", "styles/**", "providers/**"] },
+    { "name": "Manage subscription renders", "path": "/#/vip/manage", "expectText": "Manage subscription" },
+    { "name": "Payment history renders", "path": "/#/vip/payments", "expectText": "Payment history" }
   ],
   "visibility": {
     "build": "public",

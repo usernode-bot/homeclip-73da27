@@ -63,19 +63,34 @@
   })();
   </script>
   <title>HomeClip</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%237c3aed'/><circle cx='50' cy='50' r='18' fill='white'/></svg>">
-  <!-- Tailwind, PRECOMPILED for this app. The config lives in
-       tailwind.config.js; npm run build compiles it to public/tailwind.css on
-       every image build, so the stylesheet is regenerated from THIS commit's
-       markup and can never drift behind the code. Class names are written as
-       whole literals (in index.html and app.js) so the compiler sees them.
-       -->
+  <!-- The TV mark: a dark bezel, an amber screen and a small stand. -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='8' y='14' width='84' height='60' rx='10' fill='%23181512'/><rect x='16' y='22' width='68' height='44' rx='6' fill='%23fbbf24'/><rect x='40' y='80' width='20' height='8' rx='3' fill='%23181512'/></svg>">
+  <!-- Tailwind, PRECOMPILED for this app (was cdn.tailwindcss.com's
+       in-browser engine plus an inline tailwind.config here). The config
+       moved to tailwind.config.js in the repo root; npm run build compiles
+       it to public/tailwind.css with Docker or Paketo on every image build, so the
+       stylesheet is regenerated from THIS commit's markup every deploy and
+       can never drift behind the code. ~7 KB of CSS instead of a ~400 KB
+       engine, and no flash of unstyled content.
+       Writing class names as whole literals is what keeps this working — a
+       class assembled from fragments at runtime (e.g. "bg-" + tone + "-500")
+       is invisible to the compiler. If you genuinely need runtime-generated
+       classes, swap this link for the platform-hosted engine instead:
+       <script src="/usernode-tailwind/v1/tailwind.js"></script> -->
   <link rel="stylesheet" href="/tailwind.css">
-  <!-- The platform bridge, centrally hosted and loaded by RELATIVE path. Never
-       vendor it and never write a hostname in front of it. It is NOT
-       conditional on this app calling a bridge API: it is also how the app
-       ANSWERS the shell, and it is where the app learns the viewer's
-       light/dark theme: the script below reads it. -->
+  <link rel="stylesheet" href="/screens.css">
+  <!-- The platform bridge, centrally hosted and loaded by RELATIVE path (the
+       handler in server.js serves it under a plain "node server.js"; the
+       platform's edge answers it everywhere else). Never vendor it and never
+       write a hostname in front of it.
+       It is NOT conditional on this app calling a bridge API: it is also how
+       the app ANSWERS the shell, so a scaffold without it is invisible to
+       anything that asks the frame a question. Offline launch is one of those.
+       Another is the page's colour: the bridge reports this document's opaque
+       ground to the shell (#1581), which is what makes the platform bar above
+       the app take the app's tone instead of the viewer's theme (#1945).
+       The bridge is also where the app learns the viewer's light/dark theme:
+       the script below reads it. -->
   <script src="/usernode-bridge/v1/bridge.js"></script>
   <!-- Follow the viewer's Homeroom theme (the bridge reports it), with the
        OS preference as the fallback outside Homeroom. -->
@@ -94,28 +109,170 @@
   </script>
 </head>
 <body class="min-h-screen bg-ground text-fg">
-  <main class="page-column flex flex-col gap-6 px-4 py-6">
-    <!-- The app's own mark: the emoji from dapp.json's icon block. -->
-    <header class="flex items-center justify-between gap-2">
-      <a href="/" data-link class="flex items-center gap-2 no-underline text-fg">
-        <span class="flex h-10 w-10 items-center justify-center rounded-xl border border-line bg-surface text-xl" aria-hidden="true">📺</span>
-        <span class="text-heading">HomeClip</span>
-      </a>
-      <nav class="flex items-center gap-2">
-        <a id="vip-button" href="/vip" data-link class="btn-secondary">VIP</a>
-      </nav>
-    </header>
-
-    <div id="view" class="flex flex-col gap-6">
-      <!-- Filled by app.js. The skeleton below is what shows while the first
-           load fetches the feed. -->
-      <ul class="list" aria-hidden="true">
-        <li class="list-row"><div class="h-12 w-12 flex-none rounded-md skeleton"></div><div class="flex min-w-0 grow flex-col gap-2"><div class="h-4 w-1/2 rounded skeleton"></div><div class="h-3 w-1/3 rounded skeleton"></div></div></li>
-        <li class="list-row"><div class="h-12 w-12 flex-none rounded-md skeleton"></div><div class="flex min-w-0 grow flex-col gap-2"><div class="h-4 w-1/2 rounded skeleton"></div><div class="h-3 w-1/3 rounded skeleton"></div></div></li>
-        <li class="list-row"><div class="h-12 w-12 flex-none rounded-md skeleton"></div><div class="flex min-w-0 grow flex-col gap-2"><div class="h-4 w-1/2 rounded skeleton"></div><div class="h-3 w-1/3 rounded skeleton"></div></div></li>
-      </ul>
+  <!-- Built from the design kit in styles/tailwind-input.css: colour tokens
+       that are right in both looks, and the components the screens use.
+       CLAUDE.md's "## Design" says how. -->
+  <!-- usernode-spec-screens@1: the screens the spec drew. Their markup and
+       styles are kept as drawn; app.js renders the rows from data and wires
+       every action. -->
+  <div data-spec-screen="1" id="view-home">
+    <div class="app">
+    <div class="top"><div class="brand"><svg style="color:rgb(var(--accent));width:24px;height:24px" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M9 21h6M12 17v4"/></svg>HomeClip</div><div style="display:flex;gap:8px"><a id="vip-button" href="#/vip" class="btn-secondary" style="text-decoration:none">VIP</a><button id="add-drama-btn" class="btn-secondary"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add drama</button></div></div>
+    <div class="pad">
+    <div id="home-state" hidden></div>
+    <div id="next-section" hidden>
+    <div class="section-label">Next to watch</div>
+    <div class="hero">
+    <div class="tv" id="hero-tv"><small id="hero-season"></small><div class="h" id="hero-title"></div><div class="bar"><i id="hero-bar"></i></div></div>
+    <div style="display:flex;align-items:center;gap:12px;margin-top:12px"><div class="grow sm muted" id="hero-note"></div><button id="hero-watch" class="btn-primary"><svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg>Watch</button></div>
     </div>
-  </main>
+
+    <div class="section-label">Continue this season</div>
+    <div class="row" id="upcoming-row" style="overflow-x:auto;padding-bottom:4px"></div>
+    </div>
+
+    <div class="section-label" id="feed-label">Drama feed</div>
+    <ul class="list" id="feed-list"></ul>
+    </div>
+    </div>
+  </div>
+
+  <!-- Screen 2 as the spec drew it, now the drama view. -->
+  <div data-spec-screen="2" id="view-drama" hidden>
+    <div class="app">
+    <div class="top"><button class="icon-btn" id="back-btn" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><span class="sm muted">Drama feed</span></div>
+    <div class="pad">
+    <div id="drama-state" hidden></div>
+    <div id="drama-body">
+    <div class="head"><div class="poster" id="drama-poster"></div><div class="grow"><h1 class="title" id="drama-title"></h1><div class="sm muted" id="drama-desc"></div><div style="margin-top:8px"><button class="fol" id="drama-follow">Follow</button></div></div></div>
+
+    <div class="section-label">Seasons</div>
+    <div class="seg" id="season-seg"></div>
+    <div class="bar"><i id="season-bar"></i></div>
+    <div class="sm muted" id="season-progress"></div>
+
+    <div class="section-label">Episodes</div>
+    <ul class="list" id="ep-list"></ul>
+    <div class="foot"><button id="add-episode-btn" class="btn-secondary"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add episode</button><button class="link" id="report-drama-btn"><svg viewBox="0 0 24 24"><path d="M5 21V4h11l-2 4 2 4H5"/></svg>Report</button><button class="link" id="remove-drama-btn" hidden><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>Remove</button></div>
+    </div>
+    </div>
+    </div>
+  </div>
+
+  <!-- VIP: plans, Manage subscription, Payment history and the return from
+       checkout, all drawn into #vip-body by app.js. -->
+  <div data-spec-screen="3" id="view-vip" hidden>
+    <div class="app">
+    <div class="top"><button class="icon-btn" id="vip-back" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><span class="brand" id="vip-title">HomeClip VIP</span><span class="w-11"></span></div>
+    <div class="pad" id="vip-body"></div>
+    </div>
+  </div>
+
+  <!-- Sheets: Add drama, Add episode, episode details, Report. -->
+  <div id="sheet-backdrop" class="fixed inset-0 z-40 hidden bg-fg/40"></div>
+  <div id="sheet-add-drama" role="dialog" aria-modal="true" aria-labelledby="add-drama-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
+    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <button class="link" data-close>Cancel</button>
+        <h2 id="add-drama-heading" class="text-heading">Add drama</h2>
+        <button id="save-drama" class="btn-primary">Add drama</button>
+      </div>
+      <p id="add-drama-error" class="mb-2 text-small" style="color:rgb(var(--danger))" hidden></p>
+      <label class="section-label" for="drama-title-input">Title</label>
+      <input id="drama-title-input" class="field" maxlength="80" placeholder="e.g. Harbour Lights" autocomplete="off">
+      <label class="section-label" for="drama-desc-input" style="margin-top:12px">Description</label>
+      <textarea id="drama-desc-input" class="field" maxlength="280" rows="3" placeholder="A sentence or two about it, e.g. A ferry town keeps its secrets"></textarea>
+    </div>
+  </div>
+  <div id="sheet-add-episode" role="dialog" aria-modal="true" aria-labelledby="add-episode-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
+    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <button class="link" data-close>Cancel</button>
+        <h2 id="add-episode-heading" class="text-heading">Add episode</h2>
+        <button id="save-episode" class="btn-primary">Add episode</button>
+      </div>
+      <p id="add-episode-error" class="mb-2 text-small" style="color:rgb(var(--danger))" hidden></p>
+      <div class="flex gap-3">
+        <div class="grow">
+          <label class="section-label" for="ep-season-input">Season</label>
+          <input id="ep-season-input" class="field" type="number" min="1" max="99" placeholder="e.g. 1" autocomplete="off">
+        </div>
+        <div class="grow">
+          <label class="section-label" for="ep-number-input">Episode number</label>
+          <input id="ep-number-input" class="field" type="number" min="1" max="999" placeholder="e.g. 7" autocomplete="off">
+        </div>
+      </div>
+      <label class="section-label" for="ep-title-input" style="margin-top:12px">Title</label>
+      <input id="ep-title-input" class="field" maxlength="80" placeholder="e.g. The Tide Table" autocomplete="off">
+      <label class="section-label" for="ep-minutes-input" style="margin-top:12px">Minutes</label>
+      <input id="ep-minutes-input" class="field" type="number" min="1" max="600" placeholder="e.g. 52" autocomplete="off">
+      <label class="section-label" for="ep-url-input" style="margin-top:12px">Link to watch</label>
+      <input id="ep-url-input" class="field" maxlength="500" placeholder="e.g. https://example.com/watch/123" autocomplete="off">
+      <label class="section-label" for="ep-access-input" style="margin-top:12px">Access</label>
+      <select id="ep-access-input" class="field">
+        <option value="free">Free</option>
+        <option value="vip">VIP</option>
+        <option value="ads">Free with ads</option>
+      </select>
+    </div>
+  </div>
+  <div id="sheet-episode" role="dialog" aria-modal="true" aria-labelledby="episode-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
+    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <button class="link" data-close>Close</button>
+        <h2 id="episode-heading" class="text-heading">Episode</h2>
+        <span class="w-11"></span>
+      </div>
+      <h3 class="text-body font-semibold" id="episode-detail-title"></h3>
+      <div class="sm muted mt-1" id="episode-detail-meta"></div>
+      <div class="sm mt-1" id="episode-detail-watchers"></div>
+      <div class="mt-1" id="episode-detail-access"></div>
+      <a id="episode-detail-link" class="link" target="_blank" rel="noopener" hidden>Open the link</a>
+      <div class="foot">
+        <button id="report-episode-btn" class="btn-secondary">Report</button>
+        <button id="remove-episode-btn" class="btn-secondary" hidden>Remove</button>
+      </div>
+    </div>
+  </div>
+  <div id="sheet-report" role="dialog" aria-modal="true" aria-labelledby="report-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
+    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <button class="link" data-close>Cancel</button>
+        <h2 id="report-heading" class="text-heading">Report</h2>
+        <button id="send-report" class="btn-primary">Send report</button>
+      </div>
+      <p id="report-error" class="mb-2 text-small" style="color:rgb(var(--danger))" hidden></p>
+      <p class="sm muted mb-2" id="report-context"></p>
+      <label class="section-label" for="report-reason">Reason</label>
+      <textarea id="report-reason" class="field" maxlength="500" rows="3" placeholder="What is wrong with it, e.g. This is not a real episode"></textarea>
+    </div>
+  </div>
+
+  <div id="sheet-paywall" role="dialog" aria-modal="true" aria-labelledby="paywall-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
+    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <button class="link" data-close>Not now</button>
+        <h2 id="paywall-heading" class="text-heading">VIP episode</h2>
+        <span class="w-11"></span>
+      </div>
+      <h3 class="text-body font-semibold">This episode is for VIP members</h3>
+      <p class="sm muted mt-1" id="paywall-detail"></p>
+      <p class="sm muted mt-1">From Rp 59.000, cancel any time.</p>
+      <div class="foot"><a href="#/vip" class="btn-primary" style="text-decoration:none">See VIP plans</a></div>
+    </div>
+  </div>
+  <div id="sheet-ad" role="dialog" aria-modal="true" aria-labelledby="ad-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
+    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <span class="chip chip-soft">Sponsored</span>
+        <h2 id="ad-heading" class="text-heading">Ad</h2>
+        <span class="w-11"></span>
+      </div>
+      <div class="sm muted rounded-lg bg-raised p-4 text-center" style="height:120px;display:flex;align-items:center;justify-content:center">An ad would play here. Your episode starts in <b id="ad-count" class="mx-1">5</b>s</div>
+      <a href="#/vip" class="link">Go VIP to skip ads</a>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>
