@@ -1,15 +1,29 @@
 // HomeClip Phase 1 mock catalog — 30 ORIGINAL sample dramas.
 // Every title, synopsis, character and cast name here is invented for this
 // app. No real show, poster artwork or licensed video is used: episode video
-// points at one committed, same-origin sample clip (MDN's CC0 flower clip in
-// public/sample/, both .webm and .mp4) so playback works without any
-// external host. The URL is extensionless; the player appends the
-// extensions and serves both sources, letting the browser pick a codec.
+// points at one of six committed, same-origin sample clips in public/sample/
+// (trims of the Blender Foundation's CC BY open movies, each committed as
+// .webm (VP9/Opus) and .mp4 (H.264/AAC) so a browser without H.264 still
+// decodes them). URLs are extensionless; the player appends the extensions
+// and offers both sources, letting the browser pick a codec. Drama 1
+// additionally demonstrates the HLS path: a real .m3u8 test stream with a
+// same-origin fallback clip.
 
 const VIDEO_BASE = '';
 const VIDEO_POOL = [
-  '/sample/clip',
+  '/sample/bunny',     // Big Buck Bunny
+  '/sample/sintel',    // Sintel
+  '/sample/elephants', // Elephants Dream
+  '/sample/tears',     // Tears of Steel
+  '/sample/cosmos',    // Cosmos Laundromat
+  '/sample/spring',    // Spring
 ];
+
+// Drama 1 exercises the HLS path end to end: every episode points at the
+// mux demo stream (the platform's proven HLS fixture, also used by the
+// tracker demo), with the bunny clip as the same-origin MP4/WebM fallback.
+const HLS_URL = 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8';
+const HLS_FALLBACK = '/sample/bunny';
 
 // D = drama helper: keeps the catalog below readable.
 let D = (id, title, year, country, genres, rating, popularity, featured, eps, cast, synopsis_en, synopsis_id) =>
@@ -139,15 +153,29 @@ const DRAMAS = [
 ];
 
 // Episodes are generated deterministically per drama: 8-12 episodes, 38-52
-// display minutes each, and a sample video from the pool.
+// display minutes each, and a sample video from the pool. The pool stride
+// over i must be coprime with the pool length (6), so a drama's episodes
+// rotate through every clip rather than a short cycle — the H.264-less
+// check browser plays them all, and "continue from last minute" is
+// meaningful on clips this long. The five featured dramas (ids 1-4, 6) mark
+// their final two episodes VIP: enough to meet the paywall on the popular
+// screens without gating everything.
+const VIP_DRAMA_IDS = [1, 2, 3, 4, 6];
 function episodesFor(d) {
   const out = [];
   for (let i = 1; i <= d.eps; i++) {
-    out.push({
+    const ep = {
       num: i,
       durationMin: 38 + ((d.id * 7 + i * 3) % 15),
-      videoUrl: VIDEO_BASE + VIDEO_POOL[(d.id * 5 + i * 2) % VIDEO_POOL.length],
-    });
+      videoUrl: VIDEO_BASE + VIDEO_POOL[(d.id * 5 + i) % VIDEO_POOL.length],
+      access: (VIP_DRAMA_IDS.includes(d.id) && i > d.eps - 2) ? 'vip' : 'free',
+      fallbackUrl: null,
+    };
+    if (d.id === 1) {
+      ep.videoUrl = HLS_URL;
+      ep.fallbackUrl = HLS_FALLBACK;
+    }
+    out.push(ep);
   }
   return out;
 }

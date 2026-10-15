@@ -53,7 +53,11 @@
     { "name": "Payment history renders", "path": "/tracker#/vip/payments", "expectText": "Payment history" },
     { "id": "profiles.screen", "name": "Profiles screen", "path": "/profiles", "expectText": "Add profile", "visual": true, "impact": ["public/js/views/profiles.js", "public/js/views/profile.js", "public/js/router.js", "styles/**", "server.js"] },
     { "id": "add.screen", "name": "Add a drama screen", "path": "/add", "expectText": "Add a drama", "visual": true, "impact": ["public/js/views/add.js", "public/js/views/profile.js", "public/js/router.js", "styles/**"] },
-    { "name": "Profiles populated demo", "path": "/profiles?demo=1", "expectText": "Who's watching?" }
+    { "name": "Profiles populated demo", "path": "/profiles?demo=1", "expectText": "Who's watching?" },
+    { "id": "home.play", "name": "Home banner Play button", "path": "/", "expectSelector": "[data-b-play]", "visual": true, "impact": ["public/js/views/home.js", "public/js/ui.js", "styles/**", "data/catalog.js"] },
+    { "name": "Discover cards carry the play badge", "path": "/discover", "expectSelector": ".hc-playbadge" },
+    { "id": "player.play", "name": "Player renders with buffering spinner", "path": "/watch/2/1", "expectSelector": "[data-spinner]", "visual": true, "impact": ["public/js/views/player.js", "styles/**", "server.js", "data/catalog.js"] },
+    { "id": "player.vip-paywall", "name": "Player paywall on a VIP episode", "path": "/watch/2/9", "expectText": "This episode is for VIP", "visual": true, "impact": ["public/js/views/player.js", "server.js", "data/catalog.js", "styles/**"] }
   ],
   "visibility": {
     "build": "public",

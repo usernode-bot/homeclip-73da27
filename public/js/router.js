@@ -4,6 +4,7 @@
 import { t } from './i18n.js';
 import { icon } from './ui.js';
 import { store, applyTheme } from './store.js';
+import { getToken } from './api.js';
 
 const viewEl = () => document.getElementById('hc-view');
 const tabEl = () => document.getElementById('hc-tabbar');
@@ -95,6 +96,20 @@ export function initRouter() {
     const a = e.target.closest('a[data-nav]');
     if (!a) return;
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    // The tracker is its own page (tracker.html); cross over with a real
+    // navigation so its own router takes over. Carry the identity token in
+    // the URL — that page reads it the same way this one was loaded (the
+    // platform's edge also adds the header on the app's own address, so
+    // inside Homeroom the ?token= is redundant but harmless).
+    if (a.getAttribute('href').startsWith('/tracker')) {
+      const token = getToken();
+      const href = a.getAttribute('href');
+      if (token && !href.includes('token=')) {
+        const sep = href.includes('?') ? '&' : '?';
+        a.setAttribute('href', href + sep + 'token=' + token);
+      }
+      return;
+    }
     e.preventDefault();
     navigate(a.getAttribute('href'));
   });

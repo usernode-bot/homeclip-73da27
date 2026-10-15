@@ -2,7 +2,7 @@
 // horizontal rows (Continue Watching, Trending Now, New Episodes, Top 10).
 
 import { api } from '../api.js';
-import { el, dramaCard, hRow, skeletonHome, errorState } from '../ui.js';
+import { el, dramaCard, hRow, skeletonHome, errorState, icon } from '../ui.js';
 import { t, genreLabel, GENRES } from '../i18n.js';
 import { navigate } from '../router.js';
 
@@ -25,15 +25,20 @@ function stopBanner() {
 
 function buildBanner(featured, container) {
   if (!featured.length) return;
+  // A labelled region with two controls: the artwork link opens the drama's
+  // detail page, the round Play button opens the player at episode 1. They
+  // must not be nested inside each other, so the banner itself is neither.
   const banner = el(
-    '<a class="hc-banner mb-6 block" data-nav href="/drama/' + featured[0].id + '" aria-label="' + featured[0].title.replace(/"/g, '&quot;') + '">' +
-      '<div class="absolute inset-0">' +
-        featured.map((d, i) =>
-          '<img src="/banner/' + d.id + '.svg" alt="" loading="lazy" decoding="async" ' +
-          'class="absolute inset-0 h-full w-full object-cover ' +
-          (i === 0 ? 'opacity-100' : 'opacity-0') + ' motion-safe:transition-opacity motion-safe:duration-500" data-slide="' + i + '">'
-        ).join('') +
-      '</div>' +
+    '<div class="hc-banner mb-6" role="group" aria-label="' + featured[0].title.replace(/"/g, '&quot;') + '">' +
+      '<a class="absolute inset-0" data-nav href="/drama/' + featured[0].id + '" aria-label="' + featured[0].title.replace(/"/g, '&quot;') + '">' +
+        '<div class="absolute inset-0">' +
+          featured.map((d, i) =>
+            '<img src="/banner/' + d.id + '.svg" alt="" loading="lazy" decoding="async" ' +
+            'class="absolute inset-0 h-full w-full object-cover ' +
+            (i === 0 ? 'opacity-100' : 'opacity-0') + ' motion-safe:transition-opacity motion-safe:duration-500" data-slide="' + i + '">'
+          ).join('') +
+        '</div>' +
+      '</a>' +
       '<div class="hc-banner-text">' +
         '<p class="text-small text-muted" data-b-meta>' + featured[0].year + ' · ' + featured[0].genres.map(genreLabel).join(', ') + '</p>' +
         '<p class="text-heading" data-b-title>' + featured[0].title + '</p>' +
@@ -42,12 +47,17 @@ function buildBanner(featured, container) {
         featured.map((_d, i) =>
           '<span class="hc-banner-dot ' + (i === 0 ? 'is-active' : '') + '"></span>').join('') +
       '</div>' +
-    '</a>'
+      '<button type="button" class="hc-playfab absolute bottom-3 right-3 z-10" aria-label="' + t('home.play') + '" data-b-play>' +
+        icon('play', 'h-5 w-5') +
+      '</button>' +
+    '</div>'
   );
   const imgs = banner.querySelectorAll('img[data-slide]');
   const dots = banner.querySelectorAll('.hc-banner-dot');
   const title = banner.querySelector('[data-b-title]');
   const meta = banner.querySelector('[data-b-meta]');
+  const link = banner.querySelector('a[data-nav]');
+  const play = banner.querySelector('[data-b-play]');
   let i = 0;
   const show = (n) => {
     i = (n + featured.length) % featured.length;
@@ -58,8 +68,13 @@ function buildBanner(featured, container) {
     dots.forEach((dot, k) => dot.classList.toggle('is-active', k === i));
     title.textContent = featured[i].title;
     meta.textContent = featured[i].year + ' · ' + featured[i].genres.map(genreLabel).join(', ');
-    banner.setAttribute('href', '/drama/' + featured[i].id);
+    const href = '/drama/' + featured[i].id;
+    link.setAttribute('href', href);
+    link.setAttribute('aria-label', featured[i].title.replace(/"/g, '&quot;'));
+    banner.setAttribute('aria-label', featured[i].title.replace(/"/g, '&quot;'));
+    play.setAttribute('aria-label', t('home.play') + ' ' + featured[i].title);
   };
+  play.addEventListener('click', () => navigate('/watch/' + featured[i].id + '/1'));
   let paused = false;
   bannerTimer = setInterval(() => {
     if (paused || document.hidden) return;

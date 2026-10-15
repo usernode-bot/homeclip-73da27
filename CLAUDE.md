@@ -116,7 +116,10 @@ or licensed video is used (see `data/catalog.js`).
   deterministic genre-hued art with a play-glyph badge, so the catalog
   reads as a streaming wall without any licensed imagery. The
   Continue Watching row carries a thin accent progress bar
-  (`.hc-progress`) under the title.
+  (`.hc-progress`) under the title. Play affordances (`.hc-playfab` on
+  the banner, `.hc-playbadge` on poster cards) are round accent circles
+  with a play glyph; the VIP paywall in the player is the lock glyph on
+  the stage, never a blank screen.
 - **Type scale:** `text-title`, `text-heading`, `text-body`,
   `text-small`, nothing in between.
 - **Both looks:** the app follows the viewer's Homeroom theme (in-app
@@ -188,9 +191,20 @@ keeping every text pair at 4.5:1 or more in both looks.
   at `/poster/:id.svg`, `/banner/:id.svg` and `/subtitles/:lang.vtt`.
   Never move them under `/api/` and never serve user data there.
 - **Video strategy:** every episode points at one committed
-  extensionless URL (`/sample/clip`); the player appends `.webm` and
-  `.mp4` and offers both as `<source>` elements, so the browser picks a
-  codec it supports.
+  extensionless URL from the six-clip pool in `public/sample/` (trims of
+  Blender Foundation CC BY open movies, each committed as `.mp4`
+  (H.264+AAC) and `.webm` (VP9+Opus); pool assignment is
+  `(d.id * 5 + i) % 6`, a stride coprime with 6 so every drama cycles all
+  six clips). The player appends `.webm` and `.mp4` and offers both as
+  `<source>` elements, WebM first, so a browser without H.264 still
+  decodes. Drama 1 points at an HLS `.m3u8` demo stream instead
+  (`https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8`, fallback
+  `/sample/bunny`): the player plays it natively on Safari and through
+  lazily-injected hls.js elsewhere, falling back to the same-origin clip
+  on a fatal HLS error. Episodes also carry `access` (`free`/`vip`) and
+  `fallback_url` columns; the final two episodes of the five featured
+  dramas (ids 1-4, 6) are VIP, and locked episodes leave
+  `/api/dramas/:id` without any video URL.
 - **Per-user tables are `staging:private`:** `my_list`, `watch_progress`,
   `settings` and `profiles`. `?demo=1` (staging) seeds the viewing account
   demo rows marked `is_demo`; responses without `?demo=1` exclude those

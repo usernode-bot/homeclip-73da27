@@ -45,6 +45,9 @@ const ICON_PATHS = {
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   check: '<path d="M5 13l4.5 4.5L19 7"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 010 18a15 15 0 010-18z"/>',
+  volume: '<path d="M11 5L6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 010 7"/><path d="M18.5 6a9 9 0 010 12"/>',
+  volumeX: '<path d="M11 5L6 9H3v6h3l5 4V5z"/><path d="M16 9l5 5"/><path d="M21 9l-5 5"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
 };
 
 export function icon(name, cls) {
@@ -65,14 +68,27 @@ function buildCard(d, opts) {
   const progress = opts2.progress;
   let pct = 0;
   if (progress && progress.duration > 0) pct = Math.min(100, Math.round((progress.seconds / progress.duration) * 100));
+  // The play badge jumps straight into the player: the stored episode when
+  // the card carries progress (Continue Watching), episode 1 otherwise.
+  const badgeEp = (progress && progress.ep) || 1;
+  const detailHref = opts2.href || '/drama/' + d.id;
   const html =
-    '<a class="hc-card block shrink-0 ' + (opts2.grid ? 'w-full' : 'w-28') + '" ' +
-      'href="' + (opts2.href || '/drama/' + d.id) + '" data-nav>' +
+    // The card is a region with two links (poster/title → detail, badge →
+    // the player) rather than one <a>: a play control can't be nested in
+    // the link it sits on, same rule as the banner.
+    '<div class="hc-card block shrink-0 ' + (opts2.grid ? 'w-full' : 'w-28') + '">' +
       '<span class="poster relative">' +
-        '<img loading="lazy" decoding="async" src="' + posterUrl(d.id) + '" alt="' + d.title.replace(/"/g, '&quot;') + '">' +
+        '<a class="block" data-nav href="' + detailHref + '">' +
+          '<img loading="lazy" decoding="async" src="' + posterUrl(d.id) + '" alt="' + d.title.replace(/"/g, '&quot;') + '">' +
+        '</a>' +
         (opts2.rank ? '<span class="hc-rank">' + opts2.rank + '</span>' : '') +
+        (opts2.play === false ? '' :
+          '<a class="hc-playbadge" data-nav href="/watch/' + d.id + '/' + badgeEp + '" aria-label="' + t('home.play') + '">' +
+            icon('play', 'h-5 w-5') +
+          '</a>') +
       '</span>' +
-      '<p class="mt-1.5 truncate text-small font-medium text-fg">' + d.title + '</p>' +
+      '<p class="mt-1.5 truncate text-small font-medium text-fg">' +
+        '<a class="block" data-nav href="' + detailHref + '">' + d.title + '</a></p>' +
       '<p class="truncate text-small text-muted">' + meta + '</p>' +
       (progress
         ? '<span class="hc-progress" aria-hidden="true"><span style="width:' + pct + '%"></span></span>' +
@@ -81,14 +97,14 @@ function buildCard(d, opts) {
             (pct > 0 ? ' · ' + timeFmt(progress.seconds) : '') +
           '</p>'
         : '') +
-    '</a>';
+    '</div>';
   return el(html);
 }
 
 export function dramaCard(d, opts) {
   const o = opts || {};
   const key = d.id + ':' + (o.rank || '') + ':' + (o.grid ? 'g' : 'r') + ':' +
-    (o.href ? 'w' : 'd') + ':' +
+    (o.href ? 'w' : 'd') + ':' + (o.play === false ? 'n' : 'p') + ':' +
     (o.progress ? o.progress.ep + ':' + Math.round((o.progress.seconds || 0) / 1000) : '');
   let node = cardCache.get(key);
   if (!node) {
