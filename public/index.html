@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  
+
   <script>
   // usernode-dev-console@1
   (function () {
@@ -64,7 +64,8 @@
   })();
   </script>
   <title>HomeClip</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%237c3aed'/><circle cx='50' cy='50' r='18' fill='white'/></svg>">
+  <!-- The TV mark: a dark bezel, an amber screen and a small stand. -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='8' y='14' width='84' height='60' rx='10' fill='%23181512'/><rect x='16' y='22' width='68' height='44' rx='6' fill='%23fbbf24'/><rect x='40' y='80' width='20' height='8' rx='3' fill='%23181512'/></svg>">
   <!-- Tailwind, PRECOMPILED for this app (was cdn.tailwindcss.com's
        in-browser engine plus an inline tailwind.config here). The config
        moved to tailwind.config.js in the repo root; npm run build compiles
@@ -110,68 +111,128 @@
 </head>
 <body class="min-h-screen bg-ground text-fg">
   <!-- Built from the design kit in styles/tailwind-input.css: colour tokens
-       that are right in both looks, and components for buttons, fields,
-       lists, cards and data states. The real app keeps the kit; CLAUDE.md's
-       "## Design" says how. -->
-  <!-- (Named in prose on purpose: Tailwind compiles any class-name word in
-       these files, comments included, and the starter should ship only the
-       components its screen uses.) -->
-  <!-- usernode-spec-screens@1: the screens the spec drew, carried over by the platform as this
-       first version's starting point. Their styles are in public/screens.css.
-       Change them where behaviour needs it; do not redraw them. -->
-  <div data-spec-screen="1">
+       that are right in both looks, and the components the screens use.
+       CLAUDE.md's "## Design" says how. -->
+  <!-- usernode-spec-screens@1: the screens the spec drew. Their markup and
+       styles are kept as drawn; app.js renders the rows from data and wires
+       every action. -->
+  <div data-spec-screen="1" id="view-home">
     <div class="app">
-    <div class="top"><div class="brand"><svg style="color:rgb(var(--accent));width:24px;height:24px" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M9 21h6M12 17v4"/></svg>HomeClip</div><button class="btn-secondary"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add drama</button></div>
+    <div class="top"><div class="brand"><svg style="color:rgb(var(--accent));width:24px;height:24px" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M9 21h6M12 17v4"/></svg>HomeClip</div><button id="add-drama-btn" class="btn-secondary"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add drama</button></div>
     <div class="pad">
+    <div id="home-state" hidden></div>
+    <div id="next-section" hidden>
     <div class="section-label">Next to watch</div>
     <div class="hero">
-    <div class="tv"><small>Harbour Lights, Season 2</small><div class="h">Episode 6: The Tide Table</div><div class="bar"><i style="width:55%"></i></div></div>
-    <div style="display:flex;align-items:center;gap:12px;margin-top:12px"><div class="grow sm muted">5 of 9 watched this season<br>52 min</div><button class="btn-primary"><svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg>Watch</button></div>
+    <div class="tv" id="hero-tv"><small id="hero-season"></small><div class="h" id="hero-title"></div><div class="bar"><i id="hero-bar"></i></div></div>
+    <div style="display:flex;align-items:center;gap:12px;margin-top:12px"><div class="grow sm muted" id="hero-note"></div><button id="hero-watch" class="btn-primary"><svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg>Watch</button></div>
     </div>
 
     <div class="section-label">Continue this season</div>
-    <div class="row">
-    <div class="ep"><div class="scr">Ep 7</div><div class="foot"></div><div class="sm">The Long Way Round</div></div>
-    <div class="ep"><div class="scr">Ep 8</div><div class="foot"></div><div class="sm">Salt and Iron</div></div>
-    <div class="ep"><div class="scr">Ep 9</div><div class="foot"></div><div class="sm">Last Ferry</div></div>
+    <div class="row" id="upcoming-row" style="overflow-x:auto;padding-bottom:4px"></div>
     </div>
 
-    <div class="section-label">Drama feed</div>
-    <ul class="list">
-    <li class="list-row"><div class="poster" style="background:rgb(var(--accent))"></div><div class="grow"><div style="font-weight:600">Harbour Lights</div><div class="sm muted">2 seasons, 17 episodes</div><div class="bar" style="margin-top:6px"><i style="width:55%"></i></div></div><button class="fol">Following</button></li>
-    <li class="list-row"><div class="poster" style="background:rgb(var(--action))"></div><div class="grow"><div style="font-weight:600">The Quiet Wing</div><div class="sm muted">1 season, 8 episodes</div><div class="bar" style="margin-top:6px"><i style="width:25%"></i></div></div><button class="fol">Following</button></li>
-    <li class="list-row"><div class="poster" style="background:rgb(var(--fg))"></div><div class="grow"><div style="font-weight:600">Ninth Street</div><div class="sm muted">3 seasons, 30 episodes</div><span class="chip">New episode</span></div><button class="btn-secondary">Follow</button></li>
-    <li class="list-row"><div class="poster" style="background:rgb(var(--muted))"></div><div class="grow"><div style="font-weight:600">Meridian Court</div><div class="sm muted">1 season, 10 episodes</div><div class="sm tag">Watched by Priya and Sam</div></div><button class="btn-secondary">Follow</button></li>
-    <li class="list-row"><div class="poster" style="background:rgb(var(--accent));opacity:.7"></div><div class="grow"><div style="font-weight:600">Copper Hill</div><div class="sm muted">2 seasons, 14 episodes</div><div class="sm tag">You finished it</div></div><button class="btn-secondary">Follow</button></li>
-    </ul>
+    <div class="section-label" id="feed-label">Drama feed</div>
+    <ul class="list" id="feed-list"></ul>
     </div>
     </div>
   </div>
-  <!-- Screen 2 as the spec drew it: inert until moved where that view belongs. -->
-  <template data-spec-screen="2">
-    <div data-spec-screen="2">
-      <div class="app">
-      <div class="top"><button class="icon-btn" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><span class="sm muted">Drama feed</span></div>
-      <div class="pad">
-      <div class="head"><div class="poster"></div><div class="grow"><h1 class="title">Harbour Lights</h1><div class="sm muted">A ferry town keeps its secrets one tide at a time. Added by Sam</div><div style="margin-top:8px"><button class="fol">Following</button></div></div></div>
 
-      <div class="section-label">Seasons</div>
-      <div class="seg"><button>Season 1</button><button class="on">Season 2</button></div>
-      <div class="bar"><i style="width:55%"></i></div>
-      <div class="sm muted">5 of 9 watched this season</div>
+  <!-- Screen 2 as the spec drew it, now the drama view. -->
+  <div data-spec-screen="2" id="view-drama" hidden>
+    <div class="app">
+    <div class="top"><button class="icon-btn" id="back-btn" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><span class="sm muted">Drama feed</span></div>
+    <div class="pad">
+    <div id="drama-state" hidden></div>
+    <div id="drama-body">
+    <div class="head"><div class="poster" id="drama-poster"></div><div class="grow"><h1 class="title" id="drama-title"></h1><div class="sm muted" id="drama-desc"></div><div style="margin-top:8px"><button class="fol" id="drama-follow">Follow</button></div></div></div>
 
-      <div class="section-label">Episodes</div>
-      <ul class="list">
-      <li class="list-row"><div class="scr">5</div><div class="grow"><div style="font-weight:500">Low Water</div><div class="sm muted">48 min, watched by you, Priya and Sam</div></div><button class="check" aria-label="Watched"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg></button></li>
-      <li class="list-row"><div class="scr next">6</div><div class="grow"><div style="font-weight:600">The Tide Table</div><div class="sm muted">52 min, watched by Priya</div></div><button class="btn-primary"><svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg>Watch</button></li>
-      <li class="list-row"><div class="scr">7</div><div class="grow"><div style="font-weight:500">The Long Way Round</div><div class="sm muted">50 min</div></div><button class="check off" aria-label="Mark watched"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg></button></li>
-      <li class="list-row"><div class="scr">8</div><div class="grow"><div style="font-weight:500">Salt and Iron</div><div class="sm muted">47 min</div></div><button class="check off" aria-label="Mark watched"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg></button></li>
-      </ul>
-      <div class="foot"><button class="btn-secondary"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add episode</button><button class="link"><svg viewBox="0 0 24 24"><path d="M5 21V4h11l-2 4 2 4H5"/></svg>Report</button></div>
+    <div class="section-label">Seasons</div>
+    <div class="seg" id="season-seg"></div>
+    <div class="bar"><i id="season-bar"></i></div>
+    <div class="sm muted" id="season-progress"></div>
+
+    <div class="section-label">Episodes</div>
+    <ul class="list" id="ep-list"></ul>
+    <div class="foot"><button id="add-episode-btn" class="btn-secondary"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add episode</button><button class="link" id="report-drama-btn"><svg viewBox="0 0 24 24"><path d="M5 21V4h11l-2 4 2 4H5"/></svg>Report</button><button class="link" id="remove-drama-btn" hidden><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>Remove</button></div>
+    </div>
+    </div>
+    </div>
+  </div>
+
+  <!-- Sheets: Add drama, Add episode, episode details, Report. -->
+  <div id="sheet-backdrop" class="fixed inset-0 z-40 hidden bg-fg/40"></div>
+  <div id="sheet-add-drama" role="dialog" aria-modal="true" aria-labelledby="add-drama-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
+    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <button class="link" data-close>Cancel</button>
+        <h2 id="add-drama-heading" class="text-heading">Add drama</h2>
+        <button id="save-drama" class="btn-primary">Add drama</button>
       </div>
+      <p id="add-drama-error" class="mb-2 text-small" style="color:rgb(var(--danger))" hidden></p>
+      <label class="section-label" for="drama-title-input">Title</label>
+      <input id="drama-title-input" class="field" maxlength="80" placeholder="e.g. Harbour Lights" autocomplete="off">
+      <label class="section-label" for="drama-desc-input" style="margin-top:12px">Description</label>
+      <textarea id="drama-desc-input" class="field" maxlength="280" rows="3" placeholder="A sentence or two about it, e.g. A ferry town keeps its secrets"></textarea>
+    </div>
+  </div>
+  <div id="sheet-add-episode" role="dialog" aria-modal="true" aria-labelledby="add-episode-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
+    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <button class="link" data-close>Cancel</button>
+        <h2 id="add-episode-heading" class="text-heading">Add episode</h2>
+        <button id="save-episode" class="btn-primary">Add episode</button>
+      </div>
+      <p id="add-episode-error" class="mb-2 text-small" style="color:rgb(var(--danger))" hidden></p>
+      <div class="flex gap-3">
+        <div class="grow">
+          <label class="section-label" for="ep-season-input">Season</label>
+          <input id="ep-season-input" class="field" type="number" min="1" max="99" placeholder="e.g. 1" autocomplete="off">
+        </div>
+        <div class="grow">
+          <label class="section-label" for="ep-number-input">Episode number</label>
+          <input id="ep-number-input" class="field" type="number" min="1" max="999" placeholder="e.g. 7" autocomplete="off">
+        </div>
+      </div>
+      <label class="section-label" for="ep-title-input" style="margin-top:12px">Title</label>
+      <input id="ep-title-input" class="field" maxlength="80" placeholder="e.g. The Tide Table" autocomplete="off">
+      <label class="section-label" for="ep-minutes-input" style="margin-top:12px">Minutes</label>
+      <input id="ep-minutes-input" class="field" type="number" min="1" max="600" placeholder="e.g. 52" autocomplete="off">
+      <label class="section-label" for="ep-url-input" style="margin-top:12px">Link to watch</label>
+      <input id="ep-url-input" class="field" maxlength="500" placeholder="e.g. https://example.com/watch/123" autocomplete="off">
+    </div>
+  </div>
+  <div id="sheet-episode" role="dialog" aria-modal="true" aria-labelledby="episode-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
+    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <button class="link" data-close>Close</button>
+        <h2 id="episode-heading" class="text-heading">Episode</h2>
+        <span class="w-11"></span>
+      </div>
+      <h3 class="text-body font-semibold" id="episode-detail-title"></h3>
+      <div class="sm muted mt-1" id="episode-detail-meta"></div>
+      <div class="sm mt-1" id="episode-detail-watchers"></div>
+      <a id="episode-detail-link" class="link" target="_blank" rel="noopener" hidden>Open the link</a>
+      <div class="foot">
+        <button id="report-episode-btn" class="btn-secondary">Report</button>
+        <button id="remove-episode-btn" class="btn-secondary" hidden>Remove</button>
       </div>
     </div>
-  </template>
-  <!-- /usernode-spec-screens@1 -->
+  </div>
+  <div id="sheet-report" role="dialog" aria-modal="true" aria-labelledby="report-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
+    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <button class="link" data-close>Cancel</button>
+        <h2 id="report-heading" class="text-heading">Report</h2>
+        <button id="send-report" class="btn-primary">Send report</button>
+      </div>
+      <p id="report-error" class="mb-2 text-small" style="color:rgb(var(--danger))" hidden></p>
+      <p class="sm muted mb-2" id="report-context"></p>
+      <label class="section-label" for="report-reason">Reason</label>
+      <textarea id="report-reason" class="field" maxlength="500" rows="3" placeholder="What is wrong with it, e.g. This is not a real episode"></textarea>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
 </body>
 </html>

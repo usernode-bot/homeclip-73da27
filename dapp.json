@@ -7,5 +7,9 @@
   "governance": {
     "preset": "you_or_the_group"
   },
-  "tests": []
+  "tests": [
+    { "name": "Feed empty state", "path": "/", "expectText": "No dramas yet" },
+    { "id": "demo-feed", "name": "Populated demo", "path": "/?demo=1", "expectText": "The Tide Table", "visual": true, "impact": ["public/**", "styles/**"] },
+    { "name": "Drama page", "path": "/?demo=1#/drama/900001", "expectText": "Season 2" }
+  ]
 }
