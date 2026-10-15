@@ -66,9 +66,83 @@
     return '<svg viewBox="0 0 24 24"><path d="' + path + '"/></svg>';
   }
 
+  var STAR_PATH = 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z';
+  var HEART_PATH = 'M7 10v11H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h3zM7 10l4-7a2 2 0 0 1 2 2v4h6a1 1 0 0 1 1 1l-1.5 8a2 2 0 0 1-2 1.7H7';
+
+  // How long ago, in the app's plain words.
+  function timeAgo(iso) {
+    var s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (!(s >= 0)) return '';
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+    if (s < 172800) return 'yesterday';
+    return Math.floor(s / 86400) + ' days ago';
+  }
+
+  // A quiet confirmation, e.g. "Link copied".
+  var toastTimer = null;
+  function toast(msg) {
+    var t = $('toast');
+    $('toast-text').textContent = msg;
+    t.hidden = false;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.hidden = true; }, 2000);
+  }
+
+  // Shared links carry no token and no demo flag: they start with the app's
+  // own path only, so whoever opens them gets their own sign-in.
+  function dramaUrl(dramaId) {
+    return location.origin + location.pathname + '#/drama/' + dramaId;
+  }
+  function episodeUrl(dramaId, episodeId) {
+    return location.origin + location.pathname + '#/drama/' + dramaId + '?ep=' + episodeId;
+  }
+
+  // Share: native share where the browser offers it (it may be absent or
+  // refuse inside the cross-origin frame, so it is guarded), else the
+  // clipboard, which every app frame may write. Both run inside the tap.
+  function shareLink(url, title) {
+    if (navigator.share) {
+      return navigator.share({ title: title, url: url }).catch(function () {
+        copyLink(url);
+      });
+    }
+    copyLink(url);
+  }
+  function copyLink(url) {
+    var done = function () { toast('Link copied'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(done, function () {
+        fallbackCopy(url); done();
+      });
+      return;
+    }
+    fallbackCopy(url); done();
+  }
+  function fallbackCopy(url) {
+    var ta = document.createElement('textarea');
+    ta.value = url;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+
+  // The wording for the server's filter and rate-limit answers.
+  function filterMessage(err) {
+    if (err.message === 'profanity') return 'Please reword your comment';
+    if (err.message === 'spam') return 'This looks like spam';
+    if (err.message === 'rate_limited') return 'Easy there, try again in a moment';
+    return err.message;
+  }
+
   var $ = function (id) { return document.getElementById(id); };
   var viewerName = null;
   var isGuest = false;
+  var signedIn = false;
 
   // ── Sheets ──────────────────────────────────────────────────────────────
 
@@ -324,6 +398,8 @@
 
   function renderDrama(data) {
     currentDrama = data;
+    myReview = data.my_review || null;
+    reviewCursor = data.reviews_cursor || null;
     $('drama-state').hidden = true;
     $('drama-state').innerHTML = '';
     $('drama-body').hidden = false;
@@ -337,6 +413,13 @@
     folBtn.textContent = data.following ? 'Following' : 'Follow';
     folBtn.className = data.following ? 'fol' : 'btn-secondary';
     $('remove-drama-btn').hidden = !data.drama.mine;
+
+    drawRatingCounts(data.drama);
+    drawReviews(data.reviews || []);
+    $('share-drama-btn').onclick = function () {
+      shareLink(dramaUrl(currentDrama.drama.id), currentDrama.drama.title);
+    };
+    $('rate-btn').onclick = function () { openReviewSheet(); };
 
     // The season control starts at the season of the viewer's next episode,
     // else season 1.
@@ -369,6 +452,16 @@
       }).catch(function () {});
     };
     $('add-episode-btn').onclick = function () { openAddEpisode(); };
+
+    // A shared episode link (#/drama/123?ep=456) opens that episode's sheet.
+    if (pendingEpisodeId) {
+      // ids arrive as strings (Postgres bigint), so compare as strings.
+      var target = data.episodes.filter(function (e) {
+        return String(e.id) === String(pendingEpisodeId);
+      })[0];
+      pendingEpisodeId = null;
+      if (target) openEpisodeDetails(target);
+    }
   }
 
   function drawSeasons(data) {
@@ -440,6 +533,388 @@
       renderDramaError();
     });
   }
+
+  // ── Reviews and the rating line ─────────────────────────────────────────
+
+  var myReview = null;      // the viewer's own review, or null
+  var reviewCursor = null;  // the next page of reviews, when there is one
+  var pendingEpisodeId = null; // a shared episode link waiting for its drama
+  var starPick = 0;         // the stars picked in the Rate sheet
+
+  function starsHtml(n, cls) {
+    var out = '';
+    for (var i = 1; i <= 5; i++) {
+      out += '<svg class="star ' + (i <= n ? 'f' : 'e') + '" viewBox="0 0 24 24"><path d="' + STAR_PATH + '"/></svg>';
+    }
+    return '<span class="' + cls + '">' + out + '</span>';
+  }
+
+  // The line under the title: the average to one decimal and how many
+  // reviews, or "No reviews yet" when nobody has rated it.
+  function drawRatingCounts(summary) {
+    var line = $('drama-rating');
+    line.hidden = false;
+    if (!summary.rating_count) {
+      $('rating-avg').textContent = '';
+      $('rating-count').textContent = 'No reviews yet';
+    } else {
+      $('rating-avg').textContent = Number(summary.rating_avg).toFixed(1);
+      $('rating-count').textContent =
+        summary.rating_count === 1 ? '1 review' : summary.rating_count + ' reviews';
+    }
+    drawRateButton();
+  }
+
+  function drawRateButton() {
+    $('rate-btn').innerHTML =
+      '<svg class="star f" viewBox="0 0 24 24"><path d="' + STAR_PATH + '"/></svg>' +
+      (myReview ? 'Your review' : 'Rate');
+  }
+
+  function reviewRowHtml(r) {
+    return '<li class="list-row"><div class="review-row"><div class="review-top">' +
+      '<span class="review-name">' + esc(r.username) + '</span>' +
+      starsHtml(r.rating, 'review-stars') + '</div>' +
+      (r.note ? '<div class="sm">' + esc(r.note) + '</div>' : '') +
+      '</div></li>';
+  }
+
+  function drawReviews(reviews) {
+    $('review-list').innerHTML = reviews.map(reviewRowHtml).join('');
+    $('review-more-row').hidden = !reviewCursor;
+  }
+
+  function refreshReviews() {
+    if (!currentDrama) return;
+    api('dramas/' + currentDrama.drama.id + '/reviews').then(function (r) {
+      reviewCursor = r.next_cursor || null;
+      drawRatingCounts(r);
+      drawReviews(r.reviews);
+    }).catch(function () {});
+  }
+
+  $('review-more').addEventListener('click', function () {
+    if (!reviewCursor || !currentDrama) return;
+    api('dramas/' + currentDrama.drama.id + '/reviews?cursor=' + encodeURIComponent(reviewCursor))
+      .then(function (r) {
+        reviewCursor = r.next_cursor || null;
+        var list = $('review-list');
+        list.insertAdjacentHTML('beforeend', r.reviews.map(reviewRowHtml).join(''));
+        $('review-more-row').hidden = !reviewCursor;
+      }).catch(function () {});
+  });
+
+  function drawStarPicker() {
+    var el = $('review-stars');
+    el.innerHTML = [1, 2, 3, 4, 5].map(function (n) {
+      return '<button class="star-btn" data-star="' + n + '" aria-label="' + n + ' star' + (n > 1 ? 's' : '') + '">' +
+        '<svg class="star ' + (n <= starPick ? 'f' : 'e') + '" viewBox="0 0 24 24"><path d="' + STAR_PATH + '"/></svg></button>';
+    }).join('');
+    Array.prototype.forEach.call(el.querySelectorAll('[data-star]'), function (b) {
+      b.addEventListener('click', function () {
+        starPick = parseInt(b.getAttribute('data-star'), 10);
+        drawStarPicker();
+      });
+    });
+  }
+
+  function openReviewSheet() {
+    if (!currentDrama) return;
+    $('review-heading').textContent = myReview ? 'Your review' : 'Rate';
+    $('review-context').textContent = 'Rate ' + currentDrama.drama.title + ' out of 5 stars';
+    starPick = myReview ? myReview.rating : 0;
+    $('review-note-input').value = myReview ? (myReview.note || '') : '';
+    $('review-error').hidden = true;
+    $('remove-review').hidden = !myReview;
+    drawStarPicker();
+    showSheet('sheet-review');
+  }
+
+  $('save-review').addEventListener('click', function () {
+    if (!currentDrama) return;
+    var p = $('review-error');
+    if (!starPick) {
+      p.textContent = 'Pick 1 to 5 stars';
+      p.hidden = false;
+      return;
+    }
+    api('dramas/' + currentDrama.drama.id + '/review', { method: 'PUT', body: {
+      rating: starPick, note: $('review-note-input').value,
+    }}).then(function (r) {
+      hideSheet();
+      myReview = r.review;
+      drawRatingCounts(r);
+      refreshReviews();
+    }).catch(function (err) {
+      if (err.status === 401) { hideSheet(); return; }
+      p.textContent = filterMessage(err);
+      p.hidden = false;
+    });
+  });
+
+  $('remove-review').addEventListener('click', function () {
+    if (!currentDrama) return;
+    if (!window.confirm('Remove your review of ' + currentDrama.drama.title + '?')) return;
+    api('dramas/' + currentDrama.drama.id + '/review', { method: 'DELETE' })
+      .then(function (r) {
+        hideSheet();
+        myReview = null;
+        drawRatingCounts(r);
+        refreshReviews();
+      }).catch(function (err) {
+        if (err.status !== 401) {
+          var p = $('review-error');
+          p.textContent = err.message;
+          p.hidden = false;
+        }
+      });
+  });
+
+  // ── Comments on an episode ──────────────────────────────────────────────
+
+  var cmts = null; // { episodeId, top: [comment], cursor, replyTo } — the
+                   // thread shown in the episode sheet
+
+  function findComment(id) {
+    for (var i = 0; i < cmts.top.length; i++) {
+      var c = cmts.top[i];
+      if (String(c.id) === String(id)) return { c: c, parent: null };
+      for (var j = 0; j < (c.replies || []).length; j++) {
+        if (String(c.replies[j].id) === String(id)) return { c: c.replies[j], parent: c };
+      }
+    }
+    return null;
+  }
+
+  function likeHtml(c) {
+    return '<button class="like' + (c.viewer_liked ? ' on' : '') + '" data-like="' + c.id + '" aria-label="Like">' +
+      '<svg viewBox="0 0 24 24"><path d="' + HEART_PATH + '"/></svg>' + c.like_count + '</button>';
+  }
+
+  // Optimistic like: the heart flips straight away; the server's answer
+  // confirms it, and a failure reloads the thread so it tells the truth.
+  // Takes the { c, parent } entry findComment returns, not the comment itself.
+  function toggleLike(entry) {
+    var c = entry && entry.c;
+    if (!c || !signedIn) return;
+    var liked = !c.viewer_liked;
+    c.viewer_liked = liked;
+    c.like_count += liked ? 1 : -1;
+    renderComments();
+    api('comments/' + c.id + '/like', { method: liked ? 'POST' : 'DELETE' })
+      .then(function (r) {
+        c.like_count = r.likes;
+        c.viewer_liked = r.liked;
+        renderComments();
+      })
+      .catch(function (err) {
+        if (err.status !== 401) reloadComments();
+      });
+  }
+
+  function actsHtml(c) {
+    return '<div class="acts">' + likeHtml(c) +
+      '<button class="act" data-reply="' + c.id + '">Reply</button>' +
+      '<button class="act" data-report="' + c.id + '">Report</button>' +
+      (c.mine ? '<button class="act danger" data-del="' + c.id + '">Delete</button>' : '') +
+      '</div>';
+  }
+
+  function commentInnerHtml(c) {
+    var head = '<div class="cmt-top"><span class="who">' + esc(c.mine ? 'You' : c.username) + '</span>' +
+      '<span class="sm muted">' + esc(timeAgo(c.created_at)) + '</span></div>';
+    var body = '<div class="cmt-body">' +
+      (c.reply_to_username ? '<span class="ind">@' + esc(c.reply_to_username) + '</span> ' : '') +
+      esc(c.body) + '</div>';
+    return head + body + actsHtml(c);
+  }
+
+  function commentHtml(c) {
+    var replies = c.replies && c.replies.length
+      ? '<div class="replies">' + c.replies.map(function (r) {
+          return '<div class="cmt">' + commentInnerHtml(r) + '</div>';
+        }).join('') + '</div>'
+      : '';
+    return '<li class="cmt" data-cmt="' + esc(c.id) + '">' + commentInnerHtml(c) + replies + '</li>';
+  }
+
+  function renderComments() {
+    var list = $('comment-list');
+    if (!cmts.top.length) {
+      list.innerHTML = '<li class="state-empty" style="list-style:none"><div class="text-body font-semibold">No comments yet</div>' +
+        '<p class="text-small" style="color:rgb(var(--muted))">Say what you thought of this episode.</p></li>';
+      $('comment-more-row').hidden = true;
+      return;
+    }
+    list.innerHTML = cmts.top.map(commentHtml).join('');
+    $('comment-more-row').hidden = !cmts.cursor;
+    wireCommentActions();
+  }
+
+  function wireCommentActions() {
+    var list = $('comment-list');
+    Array.prototype.forEach.call(list.querySelectorAll('[data-like]'), function (b) {
+      b.addEventListener('click', function () { toggleLike(findComment(b.getAttribute('data-like'))); });
+    });
+    Array.prototype.forEach.call(list.querySelectorAll('[data-reply]'), function (b) {
+      b.addEventListener('click', function () {
+        var entry = findComment(b.getAttribute('data-reply'));
+        if (!entry) return;
+        cmts.replyTo = { id: entry.c.id, name: entry.c.username };
+        updateReplyingChip();
+        $('comment-input').focus();
+      });
+    });
+    Array.prototype.forEach.call(list.querySelectorAll('[data-report]'), function (b) {
+      b.addEventListener('click', function () {
+        var entry = findComment(b.getAttribute('data-report'));
+        if (entry) openReport({ comment_id: entry.c.id, name: 'this comment' });
+      });
+    });
+    Array.prototype.forEach.call(list.querySelectorAll('[data-del]'), function (b) {
+      b.addEventListener('click', function () {
+        var entry = findComment(b.getAttribute('data-del'));
+        if (!entry) return;
+        if (!window.confirm('Delete this comment and its replies?')) return;
+        removeComment(entry.c.id);
+        renderComments();
+        api('comments/' + entry.c.id, { method: 'DELETE' })
+          .catch(function () { reloadComments(); });
+      });
+    });
+  }
+
+  function removeComment(id) {
+    for (var i = 0; i < cmts.top.length; i++) {
+      var c = cmts.top[i];
+      if (String(c.id) === String(id)) { cmts.top.splice(i, 1); return; }
+      for (var j = 0; j < (c.replies || []).length; j++) {
+        if (String(c.replies[j].id) === String(id)) { c.replies.splice(j, 1); return; }
+      }
+    }
+  }
+
+  function replaceComment(tmpId, serverComment) {
+    for (var i = 0; i < cmts.top.length; i++) {
+      var c = cmts.top[i];
+      if (String(c.id) === String(tmpId)) { cmts.top[i] = serverComment; return; }
+      for (var j = 0; j < (c.replies || []).length; j++) {
+        if (String(c.replies[j].id) === String(tmpId)) { c.replies[j] = serverComment; return; }
+      }
+    }
+  }
+
+  function updateReplyingChip() {
+    var chip = $('comment-replying');
+    if (cmts && cmts.replyTo) {
+      $('comment-replying-name').textContent = cmts.replyTo.name;
+      chip.hidden = false;
+    } else {
+      chip.hidden = true;
+    }
+  }
+
+  function commentSkeleton() {
+    var row = function () {
+      return '<li class="cmt"><div class="skeleton" style="height:12px;width:30%;margin-bottom:6px"></div>' +
+        '<div class="skeleton" style="height:12px;width:80%"></div></li>';
+    };
+    return row() + row() + row();
+  }
+
+  function reloadComments() {
+    if (cmts) loadComments(cmts.episodeId);
+  }
+
+  function loadComments(episodeId) {
+    cmts = { episodeId: episodeId, top: [], cursor: null, replyTo: null };
+    updateReplyingChip();
+    $('comment-input').value = '';
+    $('comment-error').hidden = true;
+    $('comment-list').innerHTML = commentSkeleton();
+    $('comment-more-row').hidden = true;
+    api('episodes/' + episodeId + '/comments').then(function (r) {
+      if (!cmts || cmts.episodeId !== episodeId) return;
+      cmts.top = r.comments;
+      cmts.cursor = r.next_cursor;
+      renderComments();
+    }).catch(function () {
+      if (!cmts || cmts.episodeId !== episodeId) return;
+      $('comment-list').innerHTML =
+        '<li class="state-error" style="list-style:none"><div class="text-body font-semibold">The comments could not be loaded</div>' +
+        '<p class="text-small" style="color:rgb(var(--muted))">Everything else on this sheet still works.</p>' +
+        '<button id="retry-comments" class="btn-secondary">Retry</button></li>';
+      $('retry-comments').addEventListener('click', function () { loadComments(episodeId); });
+    });
+  }
+
+  $('comment-more').addEventListener('click', function () {
+    if (!cmts || !cmts.cursor) return;
+    api('episodes/' + cmts.episodeId + '/comments?cursor=' + encodeURIComponent(cmts.cursor))
+      .then(function (r) {
+        if (!cmts) return;
+        cmts.top = cmts.top.concat(r.comments);
+        cmts.cursor = r.next_cursor;
+        renderComments();
+      }).catch(function () {});
+  });
+
+  function postComment() {
+    if (!cmts) return;
+    var input = $('comment-input');
+    var body = input.value.trim();
+    if (!body) return;
+    var replyTo = cmts.replyTo;
+    var optimistic = null;
+    if (signedIn) {
+      // In the thread straight away, with the server's answer replacing it.
+      optimistic = {
+        id: 'tmp' + Date.now(), username: viewerName, body: body,
+        created_at: new Date().toISOString(),
+        reply_to_username: replyTo ? replyTo.name : null,
+        like_count: 0, viewer_liked: false, mine: true, replies: [],
+      };
+      if (replyTo) {
+        var entry = findComment(replyTo.id);
+        if (entry) (entry.parent || entry.c).replies.push(optimistic);
+      } else {
+        cmts.top.unshift(optimistic);
+      }
+      input.value = '';
+      cmts.replyTo = null;
+      $('comment-error').hidden = true;
+      updateReplyingChip();
+      renderComments();
+    }
+    var payload = { body: body };
+    if (replyTo) payload.parent_id = replyTo.id;
+    api('episodes/' + cmts.episodeId + '/comments', { method: 'POST', body: payload })
+      .then(function (r) {
+        $('comment-error').hidden = true;
+        if (optimistic) {
+          replaceComment(optimistic.id, r.comment);
+          renderComments();
+        } else {
+          // A guest was asked for an account by the bridge; their text stays.
+        }
+      }).catch(function (err) {
+        if (optimistic) { removeComment(optimistic.id); renderComments(); }
+        if (err.status === 401) return; // the bridge asks for an account
+        var p = $('comment-error');
+        p.textContent = filterMessage(err);
+        p.hidden = false;
+      });
+  }
+  $('post-comment').addEventListener('click', postComment);
+  $('comment-input').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') postComment();
+  });
+  $('comment-input').addEventListener('input', function () {
+    $('comment-error').hidden = true;
+  });
+  $('cancel-reply').addEventListener('click', function () {
+    if (cmts) { cmts.replyTo = null; updateReplyingChip(); }
+  });
 
   // ── Sheets' contents ────────────────────────────────────────────────────
 
@@ -523,6 +998,11 @@
     $('report-episode-btn').onclick = function () {
       openReport({ episode_id: ep.id, name: ep.title });
     };
+    $('share-episode-btn').onclick = function () {
+      shareLink(episodeUrl(currentDrama.drama.id, ep.id),
+        currentDrama.drama.title + ' - ' + ep.title);
+    };
+    loadComments(ep.id);
     showSheet('sheet-episode');
   }
 
@@ -534,6 +1014,7 @@
       api('reports', { method: 'POST', body: {
         drama_id: target.drama_id || null,
         episode_id: target.episode_id || null,
+        comment_id: target.comment_id || null,
         reason: $('report-reason').value || null,
       }}).then(function () {
         hideSheet();
@@ -551,11 +1032,13 @@
 
   function route() {
     var hash = location.hash || '#/';
-    var drama = hash.match(/^#\/drama\/(\d+)$/);
+    // #/drama/:id, and a shared episode link #/drama/:id?ep=:episodeId.
+    var drama = hash.match(/^#\/drama\/(\d+)(?:\?ep=(\d+))?$/);
     if (drama) {
       $('view-home').hidden = true;
       $('view-drama').hidden = false;
       hideSheet();
+      pendingEpisodeId = drama[2] ? Number(drama[2]) : null;
       loadDrama(drama[1]);
     } else {
       $('view-drama').hidden = true;
@@ -575,11 +1058,12 @@
 
   // The skeleton shows while /api/me is still pending too, not only while
   // the feed request is: route() (which calls loadHome) waits for it.
-  if (!/^#\/drama\/\d+$/.test(location.hash || '#/')) renderHomeSkeleton();
+  if (!/^#\/drama\/\d+/.test(location.hash || '#/')) renderHomeSkeleton();
 
   api('me').then(function (me) {
     viewerName = me.user ? me.user.username : null;
     isGuest = !!me.guest;
+    signedIn = !!me.user;
     if (!me.user) $('add-drama-btn').disabled = true;
     route();
   }).catch(function () {

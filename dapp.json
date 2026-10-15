@@ -10,7 +10,10 @@
   "tests": [
     { "name": "Feed empty state", "path": "/", "expectText": "No dramas yet" },
     { "id": "demo-feed", "name": "Populated demo", "path": "/?demo=1", "expectText": "The Tide Table", "visual": true, "impact": ["public/**", "styles/**"] },
-    { "name": "Drama page", "path": "/?demo=1#/drama/900001", "expectText": "Season 2" }
+    { "name": "Drama page", "path": "/?demo=1#/drama/900001", "expectText": "Season 2" },
+    { "id": "drama-reviews", "name": "Drama page with reviews", "path": "/?demo=1#/drama/900001", "expectText": "3 reviews", "visual": true, "impact": ["public/**", "styles/**", "server.js", "moderation.js"] },
+    { "id": "episode-comments", "name": "Episode sheet comments", "path": "/?demo=1#/drama/900001?ep=9000005", "expectText": "Comments", "visual": true, "impact": ["public/**", "styles/**", "server.js", "moderation.js"] },
+    { "id": "drama-no-reviews", "name": "Drama page without reviews", "path": "/?demo=1#/drama/900003", "expectText": "No reviews yet" }
   ],
   "visibility": {
     "build": "public",

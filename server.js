@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
+const { isProfane, isSpam, loose } = require('./moderation');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -214,10 +215,56 @@ async function ensureSchema() {
       reason TEXT CHECK (reason IS NULL OR length(reason) <= 500),
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
+  // Phase 4a: comments (one level of replies), their likes, and drama
+  // reviews. Each stores one person's own content, so each is
+  // staging:private like follows/watches/reports. They reference only the
+  // public dramas/episodes tables, so the public-to-private rule is not
+  // triggered.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS comments (
+      id BIGSERIAL PRIMARY KEY,
+      episode_id BIGINT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+      user_id BIGINT NOT NULL,
+      username TEXT NOT NULL,
+      parent_id BIGINT REFERENCES comments(id) ON DELETE CASCADE,
+      reply_to_username TEXT,
+      body TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 500),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS comments_thread_idx
+    ON comments (episode_id, parent_id, created_at)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS comments_user_idx
+    ON comments (user_id, episode_id, created_at)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS comment_likes (
+      user_id BIGINT NOT NULL,
+      comment_id BIGINT NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (user_id, comment_id)
+    )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reviews (
+      drama_id BIGINT NOT NULL REFERENCES dramas(id) ON DELETE CASCADE,
+      user_id BIGINT NOT NULL,
+      username TEXT NOT NULL,
+      rating INT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+      note TEXT CHECK (note IS NULL OR length(note) <= 280),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (drama_id, user_id)
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS reviews_drama_idx
+    ON reviews (drama_id, created_at DESC)`);
+  // A report may now name a comment; nullable, so existing rows keep working.
+  await pool.query(`ALTER TABLE reports ADD COLUMN IF NOT EXISTS
+    comment_id BIGINT REFERENCES comments(id) ON DELETE CASCADE`);
   // staging:private copies the schema to staging without the rows.
   await pool.query(`COMMENT ON TABLE follows IS 'staging:private'`);
   await pool.query(`COMMENT ON TABLE watches IS 'staging:private'`);
   await pool.query(`COMMENT ON TABLE reports IS 'staging:private'`);
+  await pool.query(`COMMENT ON TABLE comments IS 'staging:private'`);
+  await pool.query(`COMMENT ON TABLE comment_likes IS 'staging:private'`);
+  await pool.query(`COMMENT ON TABLE reviews IS 'staging:private'`);
 }
 
 // ── Demo seed (staging only) ─────────────────────────────────────────────
@@ -347,6 +394,63 @@ async function seedDemo() {
       [DEMO_USERS[name], name, dramaId]
     );
   }
+  await seedDemoCommunity();
+}
+
+// Phase 4a demo rows: comments, likes and reviews on the demo dramas, with
+// fixed ids so a re-seed after a partial boot still lands and nothing is
+// duplicated. Fake identities only (Priya, Sam, Jun); nothing here runs in
+// production, and every response without ?demo=1 leaves is_demo episodes'
+// comments out of sight — the plain route stays production-shaped.
+const DEMO_COMMENTS = [
+  // Harbour Lights, "The Harbourmaster" (9000005): a thread and a liked one.
+  [9500001, 9000005, 'Priya', null, null, 'The harbourmaster knew all along, I am sure of it.', '4 days'],
+  [9500002, 9000005, 'Sam', 9500001, 'Priya', 'Wait for episode 8, the salt return scene says it.', '3 days'],
+  [9500003, 9000005, 'Jun', null, null, 'That last scene on the ferry was perfect.', '2 days'],
+  [9500004, 9000005, 'Sam', null, null, 'Watched twice now and it holds up.', '1 day'],
+  // Copper Hill, "After the Strike" (9000050): a second thread.
+  [9500005, 9000050, 'Sam', null, null, 'The new foreman is my favourite character already.', '5 days'],
+  [9500006, 9000050, 'Jun', null, null, 'Nobody is talking about the weighbridge scene? Come on.', '5 days'],
+  // The Quiet Wing, "Admissions" (9000016).
+  [9500007, 9000016, 'Priya', null, null, 'What an opening hour. Quiet and unsettling.', '6 days'],
+];
+const DEMO_COMMENT_LIKES = [
+  ['Priya', 9500004], ['Jun', 9500004],          // Sam's comment: 2 likes
+  ['Sam', 9500001], ['Jun', 9500001],
+  ['Priya', 9500006], ['Sam', 9500007],
+];
+const DEMO_REVIEWS = [
+  // Harbour Lights: average 4.3 from 3 reviews.
+  ['Priya', 900001, 5, 'Staging demo: best thing we have watched together.', '3 days'],
+  ['Sam', 900001, 4, 'Staging demo: slow start, great last three episodes.', '2 days'],
+  ['Jun', 900001, 4, null, '1 day'],
+  // Meridian Court: a single 3-star review, no note.
+  ['Priya', 900004, 3, null, '4 days'],
+];
+
+async function seedDemoCommunity() {
+  for (const [id, episodeId, by, parentId, replyTo, body, ago] of DEMO_COMMENTS) {
+    await pool.query(
+      `INSERT INTO comments (id, episode_id, user_id, username, parent_id, reply_to_username, body, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now() - $8::interval) ON CONFLICT (id) DO NOTHING`,
+      [id, episodeId, DEMO_USERS[by], by, parentId, replyTo, body, ago]
+    );
+  }
+  for (const [name, commentId] of DEMO_COMMENT_LIKES) {
+    await pool.query(
+      `INSERT INTO comment_likes (user_id, comment_id, created_at)
+       VALUES ($1, $2, now() - interval '1 day') ON CONFLICT DO NOTHING`,
+      [DEMO_USERS[name], commentId]
+    );
+  }
+  for (const [name, dramaId, rating, note, ago] of DEMO_REVIEWS) {
+    await pool.query(
+      `INSERT INTO reviews (drama_id, user_id, username, rating, note, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, now() - $6::interval, now() - $6::interval)
+       ON CONFLICT (drama_id, user_id) DO NOTHING`,
+      [dramaId, DEMO_USERS[name], name, rating, note, ago]
+    );
+  }
 }
 
 // On the first ?demo=1 request of the viewing account, write its follows and
@@ -387,6 +491,20 @@ async function seedDemoViewer(user) {
   for (const row of eps.rows) {
     if (String(row.drama_id) === '900005') await put(row.id, '5 days');
   }
+  // Phase 4a: the viewer's own demo comment and review, once, with fixed
+  // ids/keys, so "Delete" and "Your review" can be seen on the demo route.
+  await pool.query(
+    `INSERT INTO comments (id, episode_id, user_id, username, body, created_at)
+     VALUES (9500099, 9000005, $1, $2, 'Calling it now: the tide table is a map.', now() - interval '1 hour')
+     ON CONFLICT (id) DO NOTHING`,
+    [user.id, user.username]
+  );
+  await pool.query(
+    `INSERT INTO reviews (drama_id, user_id, username, rating, note, created_at, updated_at)
+     VALUES (900005, $1, $2, 5, 'Staging demo: the last shift got me.', now() - interval '1 day', now() - interval '1 day')
+     ON CONFLICT (drama_id, user_id) DO NOTHING`,
+    [user.id, user.username]
+  );
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -403,6 +521,23 @@ function demoClause(req, col, n) {
 }
 function demoParams(req) {
   return [demoOn(req)];
+}
+
+// Opaque pagination cursor for the newest-first comment and review pages:
+// "<created_at ISO>|<id>" in base64. The client passes it back unchanged; it
+// never parses it. Postgres compares the pair row-wise, so rows that share a
+// timestamp keep a stable order.
+function encodeCursor(row) {
+  return Buffer.from(row.created_at.toISOString() + '|' + row.id).toString('base64');
+}
+function decodeCursor(raw) {
+  try {
+    const parts = Buffer.from(String(raw), 'base64').toString('utf8').split('|');
+    const t = new Date(parts[0]);
+    const id = Number(parts[1]);
+    if (isNaN(t.getTime()) || !Number.isFinite(id)) return null;
+    return { t, id };
+  } catch { return null; }
 }
 
 // Next to watch: among the viewer's follows (demo dramas excluded on the
@@ -657,6 +792,44 @@ app.get('/api/dramas/:id', async (req, res) => {
     const following = viewerId
       ? (await pool.query(`SELECT 1 FROM follows WHERE user_id = $1 AND drama_id = $2`, [viewerId, req.params.id])).rows.length > 0
       : false;
+    // The average rating rides this response (one aggregate), and the first
+    // page of reviews does too, so the drama page needs no extra round-trip;
+    // more pages come from GET /api/dramas/:id/reviews.
+    const rating = await pool.query(
+      `SELECT COUNT(*)::int AS count, AVG(rating)::float AS avg FROM reviews WHERE drama_id = $1`,
+      [req.params.id]
+    );
+    const revs = await pool.query(
+      `SELECT r.user_id, r.username, r.rating, r.note, r.created_at
+         FROM reviews r WHERE r.drama_id = $1
+        ORDER BY r.created_at DESC, r.user_id DESC LIMIT 20`,
+      [req.params.id]
+    );
+    const ratingCount = Number(rating.rows[0].count);
+    const ratingAvgRaw = rating.rows[0].avg == null ? null : Number(rating.rows[0].avg);
+    const reviews = revs.rows.map(r => ({
+      user_id: Number(r.user_id), username: r.username, rating: Number(r.rating),
+      note: r.note, created_at: r.created_at,
+      mine: !!(req.user && Number(r.user_id) === Number(req.user.id)),
+    }));
+    const reviewCursor = revs.rows.length === 20 ? encodeCursor(revs.rows[19]) : null;
+    // The viewer's own review even when it sits beyond the first page, so
+    // the Rate button can read "Your review".
+    let myReview = null;
+    if (viewerId) {
+      const mine = await pool.query(
+        `SELECT user_id, username, rating, note, created_at FROM reviews
+          WHERE drama_id = $1 AND user_id = $2`,
+        [req.params.id, viewerId]
+      );
+      if (mine.rows.length) {
+        const m = mine.rows[0];
+        myReview = {
+          user_id: Number(m.user_id), username: m.username, rating: Number(m.rating),
+          note: m.note, created_at: m.created_at, mine: true,
+        };
+      }
+    }
     // Episodes grouped by season for the season control.
     const seasons = new Map();
     for (const e of eps.rows) {
@@ -664,10 +837,17 @@ app.get('/api/dramas/:id', async (req, res) => {
       seasons.get(e.season).push(e);
     }
     return res.json({
-      drama: { ...drama, id: Number(drama.id), mine: req.user && Number(drama.added_by_id) === Number(req.user.id) },
+      drama: {
+        ...drama, id: Number(drama.id), mine: req.user && Number(drama.added_by_id) === Number(req.user.id),
+        rating_avg: ratingAvgRaw === null ? null : Math.round(ratingAvgRaw * 10) / 10,
+        rating_count: ratingCount,
+      },
       seasons: [...seasons.keys()].sort((a, b) => a - b),
       episodes: eps.rows.map(e => ({ ...e, mine: req.user && Number(e.added_by_id) === Number(req.user.id) })),
       following,
+      reviews,
+      reviews_cursor: reviewCursor,
+      my_review: myReview,
     });
   } catch (err) {
     console.error(err);
@@ -783,18 +963,313 @@ app.post('/api/reports', async (req, res) => {
   try {
     const dramaId = req.body.drama_id ? parseInt(req.body.drama_id, 10) : null;
     const episodeId = req.body.episode_id ? parseInt(req.body.episode_id, 10) : null;
-    if (!dramaId && !episodeId) return res.status(400).json({ error: 'A drama or an episode is required' });
+    const commentId = req.body.comment_id ? parseInt(req.body.comment_id, 10) : null;
+    if (!dramaId && !episodeId && !commentId) return res.status(400).json({ error: 'A drama, an episode or a comment is required' });
     const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : null;
     if (reason && reason.length > 500) return res.status(400).json({ error: 'The reason must be 500 characters or fewer' });
     await pool.query(
-      `INSERT INTO reports (reporter_id, reporter_username, drama_id, episode_id, reason)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [req.user.id, req.user.username, dramaId, episodeId, reason]
+      `INSERT INTO reports (reporter_id, reporter_username, drama_id, episode_id, comment_id, reason)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [req.user.id, req.user.username, dramaId, episodeId, commentId, reason]
     );
     return res.status(201).json({ ok: true });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Could not send the report' });
+  }
+});
+
+// ── Phase 4a: comments, likes, reviews ───────────────────────────────────
+// Reads work for guests too (the auth middleware lets GETs through); every
+// write needs a signed-in user, which the middleware already enforces.
+// Comments and reviews of demo dramas/episodes stay out of the plain route
+// through a join to the parent row's is_demo, since these tables carry no
+// is_demo column of their own.
+
+const COMMENTS_PER_PAGE = 20;
+
+function commentRow(c, viewerId) {
+  return {
+    id: Number(c.id), user_id: Number(c.user_id), username: c.username,
+    body: c.body, created_at: c.created_at,
+    reply_to_username: c.reply_to_username,
+    like_count: Number(c.like_count), viewer_liked: !!c.viewer_liked,
+    mine: !!(viewerId && Number(c.user_id) === Number(viewerId)),
+  };
+}
+
+// The filter that keeps demo threads invisible without ?demo=1: the comment's
+// parent episode must not be a demo episode. $demo is the ?demo=1 flag.
+const COMMENT_DEMO_FILTER = `($2 OR NOT EXISTS (
+  SELECT 1 FROM episodes e WHERE e.id = c.episode_id AND e.is_demo))`;
+
+app.get('/api/episodes/:id/comments', async (req, res) => {
+  try {
+    const demo = demoOn(req);
+    const viewerId = req.user ? req.user.id : null;
+    const ep = await pool.query(
+      `SELECT id FROM episodes WHERE id = $1 AND ($2 OR NOT is_demo)`,
+      [req.params.id, demo]
+    );
+    if (!ep.rows.length) return res.status(404).json({ error: 'Episode not found' });
+    const cur = req.query.cursor ? decodeCursor(req.query.cursor) : null;
+    // Top-level comments newest first, one page; the replies of that page
+    // come along in the same request, oldest first.
+    const top = await pool.query(
+      `SELECT c.id, c.user_id, c.username, c.parent_id, c.reply_to_username,
+              c.body, c.created_at,
+              (SELECT COUNT(*) FROM comment_likes l WHERE l.comment_id = c.id)::int AS like_count,
+              EXISTS (SELECT 1 FROM comment_likes l WHERE l.comment_id = c.id AND l.user_id = $3) AS viewer_liked
+         FROM comments c
+        WHERE c.parent_id IS NULL AND c.episode_id = $1 AND ${COMMENT_DEMO_FILTER}
+          AND (${cur ? '(c.created_at, c.id) < ($4::timestamptz, $5::bigint)' : 'true'})
+        ORDER BY c.created_at DESC, c.id DESC
+        LIMIT ${COMMENTS_PER_PAGE + 1}`,
+      cur ? [req.params.id, demo, viewerId || 0, cur.t, cur.id]
+          : [req.params.id, demo, viewerId || 0]
+    );
+    const hasMore = top.rows.length > COMMENTS_PER_PAGE;
+    const page = hasMore ? top.rows.slice(0, COMMENTS_PER_PAGE) : top.rows;
+    const ids = page.map(r => r.id);
+    // The replies of that page, oldest first. They share their parent's
+    // episode, so no extra demo filter is needed here.
+    const replies = ids.length ? await pool.query(
+      `SELECT c.id, c.user_id, c.username, c.parent_id, c.reply_to_username,
+              c.body, c.created_at,
+              (SELECT COUNT(*) FROM comment_likes l WHERE l.comment_id = c.id)::int AS like_count,
+              EXISTS (SELECT 1 FROM comment_likes l WHERE l.comment_id = c.id AND l.user_id = $2) AS viewer_liked
+         FROM comments c
+        WHERE c.parent_id = ANY($1)
+        ORDER BY c.created_at ASC, c.id ASC`,
+      [ids, viewerId || 0]
+    ) : { rows: [] };
+    const byParent = new Map();
+    for (const r of replies.rows) {
+      const p = Number(r.parent_id);
+      if (!byParent.has(p)) byParent.set(p, []);
+      byParent.get(p).push(commentRow(r, viewerId));
+    }
+    return res.json({
+      comments: page.map(r => ({ ...commentRow(r, viewerId), replies: byParent.get(Number(r.id)) || [] })),
+      next_cursor: hasMore ? encodeCursor(page[page.length - 1]) : null,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Could not load the comments' });
+  }
+});
+
+app.post('/api/episodes/:id/comments', async (req, res) => {
+  try {
+    const demo = demoOn(req);
+    const ep = await pool.query(
+      `SELECT id FROM episodes WHERE id = $1 AND ($2 OR NOT is_demo)`,
+      [req.params.id, demo]
+    );
+    if (!ep.rows.length) return res.status(404).json({ error: 'Episode not found' });
+    const body = typeof req.body.body === 'string' ? req.body.body.trim() : '';
+    if (!body || body.length > 500) return res.status(400).json({ error: 'A comment of 1 to 500 characters is required' });
+    if (isProfane(body)) return res.status(400).json({ error: 'profanity' });
+    if (isSpam(body)) return res.status(400).json({ error: 'spam' });
+
+    // A reply aims at a top-level comment: replying to a reply quietly
+    // re-parents to its top-level comment, keeping one level of nesting,
+    // and the @Name label names the person actually being answered.
+    let parentId = null;
+    let replyTo = null;
+    if (req.body.parent_id) {
+      const p = await pool.query(
+        `SELECT id, parent_id, user_id, username FROM comments WHERE id = $1 AND episode_id = $2`,
+        [req.body.parent_id, req.params.id]
+      );
+      if (!p.rows.length) return res.status(400).json({ error: 'The comment being replied to is gone' });
+      const parent = p.rows[0];
+      parentId = parent.parent_id === null ? Number(parent.id) : Number(parent.parent_id);
+      replyTo = parent.username;
+    }
+
+    // At most 5 comments per person per episode per rolling minute, and no
+    // sending the same normalised text again within 24 hours.
+    const recent = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM comments
+        WHERE user_id = $1 AND episode_id = $2 AND created_at > now() - interval '1 minute'`,
+      [req.user.id, req.params.id]
+    );
+    if (Number(recent.rows[0].n) >= 5) return res.status(429).json({ error: 'rate_limited' });
+    const dupe = await pool.query(
+      `SELECT body FROM comments
+        WHERE user_id = $1 AND episode_id = $2 AND created_at > now() - interval '24 hours'`,
+      [req.user.id, req.params.id]
+    );
+    if (dupe.rows.some(r => loose(r.body) === loose(body))) {
+      return res.status(400).json({ error: 'spam' });
+    }
+
+    const r = await pool.query(
+      `INSERT INTO comments (episode_id, user_id, username, parent_id, reply_to_username, body)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [req.params.id, req.user.id, req.user.username, parentId, replyTo, body]
+    );
+    const row = r.rows[0];
+    row.like_count = 0;
+    row.viewer_liked = false;
+    return res.status(201).json({
+      comment: { ...commentRow(row, req.user.id), replies: [] },
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Could not post the comment' });
+  }
+});
+
+app.post('/api/comments/:id/like', async (req, res) => {
+  try {
+    const demo = demoOn(req);
+    const c = await pool.query(
+      `SELECT c.id FROM comments c WHERE c.id = $1 AND ${COMMENT_DEMO_FILTER}`,
+      [req.params.id, demo]
+    );
+    if (!c.rows.length) return res.status(404).json({ error: 'Comment not found' });
+    await pool.query(
+      `INSERT INTO comment_likes (user_id, comment_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [req.user.id, req.params.id]
+    );
+    const n = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM comment_likes WHERE comment_id = $1`, [req.params.id]
+    );
+    return res.json({ likes: Number(n.rows[0].n), liked: true });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Could not like the comment' });
+  }
+});
+
+app.delete('/api/comments/:id/like', async (req, res) => {
+  try {
+    await pool.query(
+      `DELETE FROM comment_likes WHERE user_id = $1 AND comment_id = $2`,
+      [req.user.id, req.params.id]
+    );
+    const n = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM comment_likes WHERE comment_id = $1`, [req.params.id]
+    );
+    return res.json({ likes: Number(n.rows[0].n), liked: false });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Could not take back the like' });
+  }
+});
+
+app.delete('/api/comments/:id', async (req, res) => {
+  try {
+    const c = await pool.query(`SELECT user_id FROM comments WHERE id = $1`, [req.params.id]);
+    if (!c.rows.length) return res.status(404).json({ error: 'Comment not found' });
+    if (Number(c.rows[0].user_id) !== Number(req.user.id)) {
+      return res.status(403).json({ error: 'Only your own comment can be deleted' });
+    }
+    await pool.query(`DELETE FROM comments WHERE id = $1`, [req.params.id]);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Could not delete the comment' });
+  }
+});
+
+const REVIEWS_PER_PAGE = 20;
+
+app.get('/api/dramas/:id/reviews', async (req, res) => {
+  try {
+    const d = await pool.query(
+      `SELECT id FROM dramas WHERE id = $1 AND ${demoClause(req, 'is_demo', 2)}`,
+      [req.params.id, ...demoParams(req)]
+    );
+    if (!d.rows.length) return res.status(404).json({ error: 'Drama not found' });
+    const cur = req.query.cursor ? decodeCursor(req.query.cursor) : null;
+    const rows = await pool.query(
+      `SELECT r.user_id, r.username, r.rating, r.note, r.created_at
+         FROM reviews r WHERE r.drama_id = $1
+           AND (${cur ? '(r.created_at, r.user_id) < ($2::timestamptz, $3::bigint)' : 'true'})
+        ORDER BY r.created_at DESC, r.user_id DESC
+        LIMIT ${REVIEWS_PER_PAGE + 1}`,
+      cur ? [req.params.id, cur.t, cur.id] : [req.params.id]
+    );
+    const hasMore = rows.rows.length > REVIEWS_PER_PAGE;
+    const page = hasMore ? rows.rows.slice(0, REVIEWS_PER_PAGE) : rows.rows;
+    const summary = await ratingSummary(req.params.id);
+    return res.json({
+      reviews: page.map(r => ({
+        user_id: Number(r.user_id), username: r.username, rating: Number(r.rating),
+        note: r.note, created_at: r.created_at,
+        mine: !!(req.user && Number(r.user_id) === Number(req.user.id)),
+      })),
+      next_cursor: hasMore ? encodeCursor(page[page.length - 1]) : null,
+      rating_avg: summary.rating_avg,
+      rating_count: summary.rating_count,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Could not load the reviews' });
+  }
+});
+
+// The new average and count ride every write, so the drama page updates
+// without a refetch.
+async function ratingSummary(dramaId) {
+  const r = await pool.query(
+    `SELECT COUNT(*)::int AS count, AVG(rating)::float AS avg FROM reviews WHERE drama_id = $1`,
+    [dramaId]
+  );
+  const count = Number(r.rows[0].count);
+  const avg = r.rows[0].avg == null ? null : Math.round(Number(r.rows[0].avg) * 10) / 10;
+  return { rating_avg: avg, rating_count: count };
+}
+
+app.put('/api/dramas/:id/review', async (req, res) => {
+  try {
+    const demo = demoOn(req);
+    const d = await pool.query(
+      `SELECT id FROM dramas WHERE id = $1 AND ($2 OR NOT is_demo)`,
+      [req.params.id, demo]
+    );
+    if (!d.rows.length) return res.status(404).json({ error: 'Drama not found' });
+    const rating = parseInt(req.body.rating, 10);
+    if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: 'A rating of 1 to 5 stars is required' });
+    const note = typeof req.body.note === 'string' && req.body.note.trim() ? req.body.note.trim() : null;
+    if (note && note.length > 280) return res.status(400).json({ error: 'The note must be 280 characters or fewer' });
+    if (note && (isProfane(note) || isSpam(note))) return res.status(400).json({ error: isProfane(note) ? 'profanity' : 'spam' });
+    const r = await pool.query(
+      `INSERT INTO reviews (drama_id, user_id, username, rating, note)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (drama_id, user_id)
+       DO UPDATE SET rating = EXCLUDED.rating, note = EXCLUDED.note, updated_at = now()
+       RETURNING *`,
+      [req.params.id, req.user.id, req.user.username, rating, note]
+    );
+    const summary = await ratingSummary(req.params.id);
+    const row = r.rows[0];
+    return res.json({
+      review: {
+        user_id: Number(row.user_id), username: row.username, rating: Number(row.rating),
+        note: row.note, created_at: row.created_at, mine: true,
+      },
+      ...summary,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Could not save the review' });
+  }
+});
+
+app.delete('/api/dramas/:id/review', async (req, res) => {
+  try {
+    await pool.query(
+      `DELETE FROM reviews WHERE drama_id = $1 AND user_id = $2`, [req.params.id, req.user.id]
+    );
+    const summary = await ratingSummary(req.params.id);
+    return res.json({ ok: true, ...summary });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Could not remove the review' });
   }
 });
 
