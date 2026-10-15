@@ -95,7 +95,9 @@
 
   function renderHomeSkeleton() {
     $('next-section').hidden = true;
-    $('feed-list').innerHTML = '';
+    // Loading shows the same shape as the populated screen: the hero
+    // skeleton above, the "Drama feed" label, then the feed rows as bars.
+    $('feed-label').hidden = false;
     var state = $('home-state');
     state.hidden = false;
     var bar = function (w) { return '<div class="skeleton" style="height:12px;width:' + w + '"></div>'; };
@@ -107,13 +109,18 @@
       '<div class="hero" style="margin-bottom:4px"><div class="skeleton" style="height:150px;border-radius:12px"></div>' +
       '<div style="display:flex;gap:12px;margin-top:12px">' +
       '<div class="grow" style="display:flex;flex-direction:column;gap:6px">' + bar('70%') + bar('35%') + '</div>' +
-      '<div class="skeleton" style="width:110px;height:44px;border-radius:8px;flex:none"></div></div></div>' +
-      '<ul class="list" style="margin-top:20px">' + row() + row() + row() + row() + '</ul>';
+      '<div class="skeleton" style="width:110px;height:44px;border-radius:8px;flex:none"></div></div></div>';
+    var list = $('feed-list');
+    list.hidden = false;
+    list.innerHTML = row() + row() + row() + row();
   }
 
   function renderHomeError() {
     $('next-section').hidden = true;
-    $('feed-list').innerHTML = '';
+    $('feed-label').hidden = true;
+    var list = $('feed-list');
+    list.hidden = true;
+    list.innerHTML = '';
     var state = $('home-state');
     state.hidden = false;
     state.innerHTML =
@@ -187,10 +194,18 @@
     }
 
     var label = 'Drama feed' + (DEMO ? ' <span data-usernode-demo-note>(Staging demo)</span>' : '');
-    $('feed-label').innerHTML = label;
+    var labelEl = $('feed-label');
+    labelEl.innerHTML = label;
+    list.hidden = false;
 
     if (!data.dramas.length) {
+      // The empty state stands alone: no feed label or empty bordered list
+      // around it, and the header's Add drama is hidden so the centred
+      // amber one is the only Add drama on the screen.
+      labelEl.hidden = true;
+      list.hidden = true;
       list.innerHTML = '';
+      $('add-drama-btn').hidden = true;
       state.hidden = false;
       state.innerHTML =
         '<div class="state-empty"><div class="text-heading">No dramas yet</div>' +
@@ -199,6 +214,8 @@
       $('empty-add-drama').addEventListener('click', function () { openAddDrama(); });
       return;
     }
+    labelEl.hidden = false;
+    $('add-drama-btn').hidden = false;
     list.innerHTML = data.dramas.map(function (d) { return feedRowHtml(d, viewerName); }).join('');
     Array.prototype.forEach.call(list.querySelectorAll('[data-follow]'), function (b) {
       b.addEventListener('click', function () {

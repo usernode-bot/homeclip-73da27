@@ -9,12 +9,16 @@
    design, such as a map. */
 [data-spec-screen] {
   width: 100%;
-  max-width: 42rem;
+  max-width: 420px;
   margin-inline: auto;
 }
 
+/* hidden beats the components' display:inline-flex, which would otherwise
+   win over Tailwind preflight's [hidden] rule (this file loads after it). */
+[hidden] {display:none !important}
+
 .app {
-  width: 390px;
+  width: 100%;
   min-height: 1100px;
   background: rgb(var(--ground));
   color: rgb(var(--fg));
@@ -64,9 +68,9 @@
 
 .row {display:flex;gap:12px;overflow:hidden}
 
-.ep {flex:0 0 150px}
+.ep {flex:0 0 150px;width:150px}
 
-.ep .scr {height:90px;border-radius:8px;border:4px solid rgb(var(--fg));background:rgb(var(--raised));padding:6px;display:flex;align-items:flex-end;font-size:14px;font-weight:600}
+.ep .scr {width:100%;height:90px;border-radius:8px;border:4px solid rgb(var(--fg));background:rgb(var(--raised));padding:6px;display:flex;align-items:flex-end;font-size:14px;font-weight:600}
 
 .ep .foot {width:40px;height:4px;border-radius:0 0 4px 4px;background:rgb(var(--fg));margin:0 auto 6px}
 
@@ -91,7 +95,7 @@ svg {width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;strok
 /* Screen 2: its rules the first screen has not got. */
 
 .app {
-  width: 390px;
+  width: 100%;
   min-height: 1000px;
   background: rgb(var(--ground));
   color: rgb(var(--fg));
@@ -106,7 +110,7 @@ svg {width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;strok
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 8px 12px;
+  padding: 8px 20px;
 }
 
 .icon-btn {width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;border:0;background:none;color:rgb(var(--fg));border-radius:8px}
