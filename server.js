@@ -35,10 +35,17 @@ const GUEST_PUBLIC_KEY = (process.env.USERNODE_GUEST_JWT_PUBLIC_KEY || '')
 
 // Paths that stay open without authentication. Add a path here (and add it
 // with `app.get`/`app.post` below) if you deliberately want it public.
-// Everything else requires a valid platform-issued JWT.
-const PUBLIC_API_PATHS = new Set(['/health']);
+// Everything else requires a valid platform-issued JWT. The Stripe webhook
+// is called by Stripe's servers, which carry no platform token; it is
+// authenticated by its own HMAC signature instead (see the route below).
+const PUBLIC_API_PATHS = new Set(['/health', '/api/webhooks/stripe']);
 
-app.use(express.json());
+// Keep the raw request body alongside the parsed one: Stripe webhook
+// signatures are computed over the exact bytes on the wire, so re-serialising
+// the parsed object would break verification.
+app.use(express.json({
+  verify: (req, _res, buf) => { req.rawBody = buf; },
+}));
 
 // The platform's three centrally hosted files — the bridge, the native UI
 // kit and the Tailwind runtime — are reachable at these paths on this app's
@@ -84,7 +91,8 @@ app.get(/^\/usernode-(?:bridge|native|tailwind)\//, async (req, res) => {
 // "Now" for this request, as a Date: `req.now`, set for every request by
 // the middleware below. Read the day and the time through it (and
 // `usernode.now()` in the page), never `new Date()` or SQL's NOW(),
-// wherever they decide what shows: a reminder, a rota, a deadline.
+// wherever they decide what shows: a reminder, a rota, a deadline,
+// a subscription's renewal date.
 // Production always gets the real time. A staging preview may be shown as of
 // a chosen moment: the platform opens it with `?un-now=<ISO time>`, and the
 // page sends `usernode.now()` on as the `x-usernode-now` header. Only a
@@ -154,6 +162,379 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 // the auth-gated catch-all and surface a 401 in the console on every
 // fresh load.
 app.get('/favicon.ico', (_req, res) => res.status(204).end());
+
+/* ── HomeClip: dramas, episodes and VIP access ────────────────────────────
+ *
+ * The app's own API. Every VIP decision is made HERE, from the private
+ * `subscriptions` table, using `req.now` — never in the browser: the client
+ * only ever receives already-gated payloads (a locked VIP episode arrives
+ * without its watch_url, an ad episode arrives with `requiresAd`).
+ */
+
+// The plans. Prices are integer rupiah (IDR is zero-decimal in Stripe, so
+// no cents exist anywhere in this app). The per-month and save figures are
+// display-only; the charged amount is exactly `priceIdr`.
+const PLANS = {
+  monthly: {
+    id: 'monthly', name: 'Monthly', months: 1, priceIdr: 59000,
+    interval: { unit: 'month', count: 1 }, perMonthIdr: 59000, save: null,
+  },
+  quarterly: {
+    id: 'quarterly', name: '3 Months', months: 3, priceIdr: 149000,
+    interval: { unit: 'month', count: 3 }, perMonthIdr: 49667, save: 16,
+  },
+  yearly: {
+    id: 'yearly', name: 'Yearly', months: 12, priceIdr: 499000,
+    interval: { unit: 'year', count: 1 }, perMonthIdr: 41583, save: 29,
+  },
+};
+
+const { currentProvider } = require('./providers');
+
+function paymentConfigured() {
+  return currentProvider().id === 'stripe'
+    ? Boolean(process.env.STRIPE_SECRET_KEY)
+    : true; // other providers decide inside their own adapter
+}
+
+function addMonths(date, months) {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + months);
+  return d;
+}
+
+function addDays(date, days) {
+  const d = new Date(date);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d;
+}
+
+// Wrap an async handler so a rejected promise answers 500 JSON instead of
+// hanging the request.
+const h = (fn) => (req, res) => {
+  fn(req, res).catch((err) => {
+    console.error(err);
+    if (!res.headersSent) res.status(500).json({ error: 'server_error' });
+  });
+};
+
+/* ── Subscription state ─────────────────────────────────────────────────── */
+
+// The one place that decides who is a VIP. Picks the user's newest
+// subscription row and reads it against `req.now`: "active" and "canceled"
+// are both VIP until their renewal date passes, then everything reads
+// expired. No background reaper needed.
+async function vipStatus(req) {
+  if (!req.user) return { vip: false, status: 'expired', row: null };
+  const { rows } = await pool.query(
+    `SELECT * FROM subscriptions WHERE user_id = $1
+     ORDER BY started_at DESC, id DESC LIMIT 1`,
+    [req.user.id]
+  );
+  const row = rows[0] || null;
+  if (!row) return { vip: false, status: 'expired', row: null };
+  if (row.renewal_date && new Date(row.renewal_date) > req.now) {
+    return { vip: true, status: row.status === 'canceled' ? 'canceled' : 'active', row };
+  }
+  return { vip: false, status: 'expired', row };
+}
+
+function subscriptionPayload(s) {
+  const plan = s.row ? PLANS[s.row.plan_id] : null;
+  return {
+    vip: s.vip,
+    status: s.status, // 'active' | 'canceled' | 'expired', for display
+    plan: plan ? { id: plan.id, name: plan.name, priceIdr: plan.priceIdr } : null,
+    renewalDate: s.row ? s.row.renewal_date : null,
+    startedAt: s.row ? s.row.started_at : null,
+    canceledAt: s.row ? s.row.canceled_at : null,
+    provider: s.row ? s.row.provider : null,
+    canCancel: Boolean(s.vip && s.row && s.row.status === 'active'),
+    canResume: Boolean(s.row && s.row.status === 'canceled' && s.vip),
+  };
+}
+
+// Record a paid subscription: one new row. Older rows stay as history; the
+// newest row is always the one `vipStatus` reads.
+async function activateSubscription(userId, planId, provider, providerRef, now) {
+  await pool.query(
+    `INSERT INTO subscriptions (user_id, plan_id, status, provider, provider_ref, started_at, renewal_date)
+     VALUES ($1, $2, 'active', $3, $4, $5, $6)`,
+    [userId, planId, provider, providerRef, now, addMonths(now, PLANS[planId].months)]
+  );
+}
+
+/* ── Coupons ────────────────────────────────────────────────────────────── */
+
+// Returns { discount, code } or { error }. The server owns the arithmetic;
+// the client only displays what it is told.
+async function couponDiscount(code, plan, now) {
+  if (!code || !String(code).trim()) return { error: 'missing' };
+  const { rows } = await pool.query(
+    `SELECT * FROM coupons WHERE upper(code) = upper($1)`,
+    [String(code).trim()]
+  );
+  const c = rows[0];
+  if (!c || !c.active) return { error: 'invalid' };
+  if (c.expires_at && new Date(c.expires_at) <= now) return { error: 'expired' };
+  if (c.max_uses != null && c.uses_count >= c.max_uses) return { error: 'used_up' };
+  const discount = c.kind === 'percent'
+    ? Math.round(plan.priceIdr * c.value / 100)
+    : c.value;
+  return { discount: Math.min(discount, plan.priceIdr), code: c.code };
+}
+
+/* ── Episode access: the VIP gate ───────────────────────────────────────── */
+
+// A locked VIP episode leaves WITHOUT its watch_url, so no amount of
+// client-side editing can unlock it. Ad episodes keep their watch_url but
+// carry `requiresAd` so the page shows the pre-roll; VIP users never get
+// the flag.
+function gateEpisode(e, vip) {
+  const access = e.access || 'free';
+  const locked = access === 'vip' && !vip;
+  return {
+    ...e,
+    access,
+    locked,
+    requiresAd: access === 'ads' && !vip,
+    watch_url: locked ? null : (e.watch_url || null),
+  };
+}
+
+/* ── Plans, subscription management, payment history ────────────────────── */
+
+app.get('/api/plans', (_req, res) => {
+  res.json({
+    provider: currentProvider().id,
+    paymentConfigured: paymentConfigured(),
+    plans: Object.values(PLANS).map((p) => ({
+      id: p.id, name: p.name, priceIdr: p.priceIdr,
+      perMonthIdr: p.perMonthIdr, save: p.save, months: p.months,
+    })),
+  });
+});
+
+app.get('/api/me/subscription', h(async (req, res) => {
+  res.json(subscriptionPayload(await vipStatus(req)));
+}));
+
+app.post('/api/subscription/cancel', h(async (req, res) => {
+  const s = await vipStatus(req);
+  if (!s.row || !s.vip) return res.status(409).json({ error: 'not_active' });
+  // Cancelling keeps VIP until the renewal date already paid for.
+  await pool.query(
+    `UPDATE subscriptions SET status = 'canceled', canceled_at = $3
+     WHERE id = $1 AND user_id = $2`,
+    [s.row.id, req.user.id, req.now]
+  );
+  res.json(subscriptionPayload(await vipStatus(req)));
+}));
+
+app.post('/api/subscription/resume', h(async (req, res) => {
+  const s = await vipStatus(req);
+  if (!s.row || s.row.status !== 'canceled' || !s.vip) {
+    return res.status(409).json({ error: 'not_canceled' });
+  }
+  await pool.query(
+    `UPDATE subscriptions SET status = 'active', canceled_at = NULL
+     WHERE id = $1 AND user_id = $2`,
+    [s.row.id, req.user.id]
+  );
+  res.json(subscriptionPayload(await vipStatus(req)));
+}));
+
+app.get('/api/payments', h(async (req, res) => {
+  if (!req.user) return res.json({ payments: [] });
+  const { rows } = await pool.query(
+    `SELECT id, plan_id, provider, provider_ref, amount_idr, discount_idr,
+            coupon_code, method, status, created_at, paid_at
+     FROM payments WHERE user_id = $1
+     ORDER BY created_at DESC, id DESC`,
+    [req.user.id]
+  );
+  res.json({
+    payments: rows.map((p) => ({
+      id: p.id, planId: p.plan_id, provider: p.provider,
+      providerRef: p.provider_ref, amountIdr: p.amount_idr,
+      discountIdr: p.discount_idr, couponCode: p.coupon_code,
+      method: p.method, status: p.status,
+      createdAt: p.created_at, paidAt: p.paid_at,
+    })),
+  });
+}));
+
+app.post('/api/coupon/validate', h(async (req, res) => {
+  const plan = PLANS[req.body.planId];
+  if (!plan) return res.status(400).json({ error: 'unknown_plan' });
+  const r = await couponDiscount(req.body.couponCode, plan, req.now);
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({
+    ok: true, code: r.code, discountIdr: r.discount,
+    amountIdr: plan.priceIdr - r.discount,
+  });
+}));
+
+/* ── Checkout: Stripe sandbox, Midtrans/Xendit-ready ────────────────────── */
+
+// Where Stripe should send the browser after payment. Built from the
+// request's own host so no hostname is baked into the app.
+function requestOrigin(req) {
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https')
+    .split(',')[0].trim();
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  return `${proto}://${host}`;
+}
+
+app.post('/api/checkout', h(async (req, res) => {
+  const plan = PLANS[req.body.planId];
+  if (!plan) return res.status(400).json({ error: 'unknown_plan' });
+  const s = await vipStatus(req);
+  if (s.vip) return res.status(409).json({ error: 'already_vip' });
+  if (!paymentConfigured()) {
+    return res.status(503).json({ error: 'payments_not_configured' });
+  }
+
+  let discount = 0;
+  let couponCode = null;
+  if (req.body.couponCode) {
+    const c = await couponDiscount(req.body.couponCode, plan, req.now);
+    if (c.error) return res.status(400).json({ error: 'coupon_' + c.error });
+    discount = c.discount;
+    couponCode = c.code;
+  }
+  const amountIdr = plan.priceIdr - discount;
+
+  const payment = await pool.query(
+    `INSERT INTO payments (user_id, plan_id, provider, amount_idr, discount_idr, coupon_code, status)
+     VALUES ($1, $2, $3, $4, $5, $6, 'pending') RETURNING id`,
+    [req.user.id, plan.id, currentProvider().id, amountIdr, discount, couponCode]
+  );
+  const paymentId = payment.rows[0].id;
+  if (couponCode) {
+    await pool.query(
+      `UPDATE coupons SET uses_count = uses_count + 1 WHERE upper(code) = upper($1)`,
+      [couponCode]
+    );
+  }
+
+  try {
+    const out = await currentProvider().createCheckout({
+      plan, amountIdr, origin: requestOrigin(req),
+      userId: req.user.id, paymentId,
+    });
+    res.json({ url: out.url, sessionId: out.sessionId });
+  } catch (err) {
+    if (err.code === 'provider_not_configured') {
+      await pool.query(`UPDATE payments SET status = 'failed' WHERE id = $1`, [paymentId]);
+      return res.status(503).json({ error: 'provider_not_configured' });
+    }
+    console.error(err);
+    await pool.query(`UPDATE payments SET status = 'failed' WHERE id = $1`, [paymentId]);
+    return res.status(502).json({ error: 'checkout_failed', message: err.message });
+  }
+}));
+
+// One fulfilment path for both the browser's return and the webhook, and it
+// is idempotent: a payment row is only ever marked paid once.
+async function fulfillCheckout(session, now) {
+  const meta = session.metadata || {};
+  const paymentId = Number(meta.payment_id);
+  const userId = meta.user_id;
+  const planId = meta.plan_id;
+  if (!paymentId || !userId || !PLANS[planId]) return;
+  const cur = await pool.query(
+    `SELECT status FROM payments WHERE id = $1 AND user_id = $2`,
+    [paymentId, userId]
+  );
+  if (!cur.rows.length || cur.rows[0].status === 'paid') return;
+  await pool.query(
+    `UPDATE payments SET status = 'paid', paid_at = $2, provider_ref = $3 WHERE id = $1`,
+    [paymentId, now, session.subscription || session.id]
+  );
+  await activateSubscription(userId, planId, 'stripe', session.subscription || session.id, now);
+}
+
+// The browser lands here straight from Stripe's hosted page. The redirect
+// alone proves nothing — the server asks Stripe about the session before
+// unlocking anything.
+app.get('/api/checkout/confirm', h(async (req, res) => {
+  if (!paymentConfigured()) return res.status(503).json({ error: 'payments_not_configured' });
+  const sessionId = String(req.query.session_id || '');
+  if (!/^cs_(test|live)_\w+$/.test(sessionId)) {
+    return res.status(400).json({ error: 'bad_session' });
+  }
+  let session;
+  try {
+    session = await currentProvider().retrieveSession(sessionId);
+  } catch (err) {
+    console.error(err);
+    return res.status(502).json({ error: 'stripe_error', message: err.message });
+  }
+  if (!session.metadata || session.metadata.user_id !== req.user.id) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  if (session.payment_status === 'paid' || session.payment_status === 'no_payment_required') {
+    await fulfillCheckout(session, req.now);
+  }
+  res.json(subscriptionPayload(await vipStatus(req)));
+}));
+
+app.post('/api/webhooks/stripe', h(async (req, res) => {
+  const secret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!secret) return res.status(503).json({ error: 'webhook_not_configured' });
+  const provider = currentProvider();
+  const raw = req.rawBody || Buffer.from(JSON.stringify(req.body));
+  if (!provider.verifyEvent(raw, req.headers['stripe-signature'], secret)) {
+    return res.status(400).json({ error: 'invalid_signature' });
+  }
+  let event;
+  try {
+    event = provider.parseEvent(raw);
+  } catch {
+    return res.status(400).json({ error: 'bad_payload' });
+  }
+  const now = new Date();
+  if (event && event.type === 'checkout.session.completed') {
+    await fulfillCheckout(event.data.object, now);
+  } else if (event && event.type === 'invoice.paid') {
+    // A renewal charge: extend the subscription's renewal date by its plan
+    // length, and record the charge in the payment history.
+    const inv = event.data.object || {};
+    if (inv.subscription) {
+      const { rows } = await pool.query(
+        `SELECT * FROM subscriptions WHERE provider_ref = $1
+         ORDER BY started_at DESC LIMIT 1`,
+        [inv.subscription]
+      );
+      const row = rows[0];
+      if (row && PLANS[row.plan_id]) {
+        const base = new Date(row.renewal_date) > now ? new Date(row.renewal_date) : now;
+        await pool.query(
+          `UPDATE subscriptions SET renewal_date = $2, status = 'active', canceled_at = NULL
+           WHERE id = $1`,
+          [row.id, addMonths(base, PLANS[row.plan_id].months)]
+        );
+        await pool.query(
+          `INSERT INTO payments (user_id, plan_id, provider, provider_ref, amount_idr, method, status, created_at, paid_at)
+           VALUES ($1, $2, 'stripe', $3, $4, $5, 'paid', $6, $6)`,
+          [row.user_id, row.plan_id, inv.subscription, inv.amount_paid || PLANS[row.plan_id].priceIdr, 'card', now]
+        );
+      }
+    }
+  } else if (event && event.type === 'customer.subscription.deleted') {
+    // The provider ended the subscription now — access ends now.
+    const sub = event.data.object || {};
+    if (sub.id) {
+      await pool.query(
+        `UPDATE subscriptions SET status = 'expired'
+         WHERE provider_ref = $1 AND renewal_date > $2`,
+        [sub.id, now]
+      );
+    }
+  }
+  res.json({ received: true });
+}));
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -265,6 +646,55 @@ async function ensureSchema() {
   await pool.query(`COMMENT ON TABLE comments IS 'staging:private'`);
   await pool.query(`COMMENT ON TABLE comment_likes IS 'staging:private'`);
   await pool.query(`COMMENT ON TABLE reviews IS 'staging:private'`);
+
+  // VIP: each episode is Free, VIP or Free with ads (decided server-side, see
+  // gateEpisode); subscriptions, payments and coupons back the VIP plans.
+  await pool.query(`
+    ALTER TABLE episodes ADD COLUMN IF NOT EXISTS access TEXT NOT NULL DEFAULT 'free'
+      CHECK (access IN ('free', 'vip', 'ads'))`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS coupons (
+      code TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK (kind IN ('percent', 'fixed')),
+      value INTEGER NOT NULL,
+      max_uses INTEGER,
+      uses_count INTEGER NOT NULL DEFAULT 0,
+      expires_at TIMESTAMPTZ,
+      active BOOLEAN NOT NULL DEFAULT TRUE
+    )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS subscriptions (
+      id SERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      plan_id TEXT NOT NULL CHECK (plan_id IN ('monthly', 'quarterly', 'yearly')),
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'expired', 'canceled')),
+      provider TEXT NOT NULL DEFAULT 'stripe',
+      provider_ref TEXT,
+      started_at TIMESTAMPTZ NOT NULL,
+      renewal_date TIMESTAMPTZ NOT NULL,
+      canceled_at TIMESTAMPTZ
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS subscriptions_user_idx ON subscriptions(user_id)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payments (
+      id SERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      plan_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      provider_ref TEXT,
+      amount_idr INTEGER NOT NULL,
+      discount_idr INTEGER NOT NULL DEFAULT 0,
+      coupon_code TEXT,
+      method TEXT NOT NULL DEFAULT 'card',
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'failed', 'refunded')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      paid_at TIMESTAMPTZ
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS payments_user_idx ON payments(user_id)`);
+  // Payment history and who pays for what are financial records about a
+  // person: both tables are private (schema copied to staging, no rows).
+  await pool.query(`COMMENT ON TABLE subscriptions IS 'staging:private'`);
+  await pool.query(`COMMENT ON TABLE payments IS 'staging:private'`);
 }
 
 // ── Demo seed (staging only) ─────────────────────────────────────────────
@@ -374,6 +804,12 @@ async function seedDemo() {
     }
     n++;
   }
+  // Access levels for the demo episodes: Harbour Lights season 2 mixes VIP
+  // and ad episodes, The Quiet Wing is all VIP, Meridian Court has ads.
+  await pool.query(`UPDATE episodes SET access = 'vip' WHERE is_demo AND (
+    (drama_id = 900001 AND season = 2 AND number = 6) OR drama_id = 900002)`);
+  await pool.query(`UPDATE episodes SET access = 'ads' WHERE is_demo AND (
+    (drama_id = 900001 AND season = 2 AND number = 8) OR drama_id = 900004)`);
   const eps = await pool.query(`SELECT id, drama_id, season, number FROM episodes WHERE is_demo = true`);
   const byKey = new Map(eps.rows.map(r => [r.drama_id + ':' + r.season + ':' + r.number, r.id]));
   for (const [name, uid] of Object.entries(DEMO_USERS)) {
@@ -561,7 +997,7 @@ async function nextToWatch(userId, demo) {
   );
   for (const row of res.rows) {
     const un = await pool.query(
-      `SELECT id, season, number, title, minutes, watch_url
+      `SELECT id, season, number, title, minutes, watch_url, access
          FROM episodes
         WHERE drama_id = $1 AND ($3 OR NOT is_demo) AND NOT EXISTS (
           SELECT 1 FROM watches WHERE user_id = $2 AND episode_id = episodes.id)
@@ -571,7 +1007,7 @@ async function nextToWatch(userId, demo) {
     if (!un.rows.length) continue;
     const hero = un.rows[0];
     const later = await pool.query(
-      `SELECT id, season, number, title, minutes, watch_url
+      `SELECT id, season, number, title, minutes, watch_url, access
          FROM episodes
         WHERE drama_id = $1 AND season = $2 AND number > $3 AND ($5 OR NOT is_demo)
           AND NOT EXISTS (SELECT 1 FROM watches WHERE user_id = $4 AND episode_id = episodes.id)
@@ -600,6 +1036,43 @@ app.use('/api/', async (req, res, next) => {
   next();
 });
 
+// ── Staging seed for VIP ──────────────────────────────────────────────────
+// Staging containers boot with empty copies of the private tables, so seed
+// the data the testing steps reference: obviously fake, fake identities only,
+// idempotent, and never a signal the app's own logic reads about the person
+// opening the preview (the seeded subscriptions belong to named fixture
+// accounts, not to whoever opens it). Demo episodes get their access levels
+// in seedDemo.
+async function seedStagingVip() {
+  const guard = await pool.query(`SELECT 1 FROM coupons WHERE code = 'STAGE10'`);
+  if (guard.rows.length) return;
+  const now = new Date();
+  await pool.query(
+    `INSERT INTO coupons (code, kind, value, max_uses, uses_count, expires_at, active)
+     VALUES ('STAGE10', 'percent', 10, 50, 0, '2027-01-01T00:00:00Z', true)
+     ON CONFLICT (code) DO NOTHING`
+  );
+  // The three subscription states, on the shots' fixture accounts (never on
+  // whoever opens the preview): active, canceled-still-VIP, expired.
+  await pool.query(
+    `INSERT INTO subscriptions (user_id, plan_id, status, provider, provider_ref, started_at, renewal_date, canceled_at) VALUES
+      ('usernode-capture', 'monthly', 'active', 'stripe', 'staging-demo-sub-1', $1, $2, NULL),
+      ('usernode-capture-admin', 'quarterly', 'canceled', 'stripe', 'staging-demo-sub-2', $3, $4, $5),
+      ('usernode-shots-full-admin', 'yearly', 'expired', 'stripe', 'staging-demo-sub-3', $6, $7, NULL)`,
+    [
+      addDays(now, -10), addDays(now, 30),
+      addDays(now, -20), addDays(now, 20), addDays(now, -1),
+      addDays(now, -40), addDays(now, -10),
+    ]
+  );
+  await pool.query(
+    `INSERT INTO payments (user_id, plan_id, provider, provider_ref, amount_idr, discount_idr, coupon_code, method, status, created_at, paid_at) VALUES
+      ('usernode-capture', 'monthly', 'stripe', 'staging-demo-pay-1', 53100, 5900, 'STAGE10', 'card', 'paid', '2026-09-15T09:00:00Z', '2026-09-15T09:00:10Z'),
+      ('usernode-capture', 'monthly', 'stripe', 'staging-demo-pay-2', 59000, 0, NULL, 'card', 'paid', '2026-10-15T09:00:00Z', '2026-10-15T09:00:10Z'),
+      ('usernode-capture', 'yearly', 'stripe', 'staging-demo-pay-3', 499000, 0, NULL, 'ewallet', 'pending', '2026-10-12T14:00:00Z', NULL)`
+  );
+}
+
 // ── API routes ────────────────────────────────────────────────────────────
 
 // Who is signed in, if anyone (the page asks, not the URL: at the app's own
@@ -616,6 +1089,7 @@ app.get('/api/feed', async (req, res) => {
     const demo = demoOn(req);
     const viewerId = req.user ? req.user.id : null;
     const viewerName = req.user ? req.user.username : null;
+    const vip = (await vipStatus(req)).vip;
     // Dramas newest first.
     const dramas = await pool.query(
       `SELECT id, title, synopsis, added_by_id, added_by_username, created_at
@@ -627,7 +1101,9 @@ app.get('/api/feed', async (req, res) => {
 
     // Season and episode counts.
     const counts = ids.length ? await pool.query(
-      `SELECT drama_id, COUNT(*) AS episodes, COUNT(DISTINCT season) AS seasons
+      `SELECT drama_id, COUNT(*) AS episodes, COUNT(DISTINCT season) AS seasons,
+              COUNT(*) FILTER (WHERE access = 'vip') AS vip_count,
+              COUNT(*) FILTER (WHERE access = 'ads') AS ads_count
          FROM episodes WHERE ${demoClause(req, 'is_demo', 1)} AND drama_id = ANY($2)
         GROUP BY drama_id`, [...demoParams(req), ids]
     ) : { rows: [] };
@@ -668,7 +1144,7 @@ app.get('/api/feed', async (req, res) => {
     if (viewerId && followed.size) next = await nextToWatch(viewerId, demo);
 
     const out = dramas.rows.map(d => {
-      const c = countBy.get(d.id) || { episodes: 0, seasons: 0 };
+      const c = countBy.get(d.id) || { episodes: 0, seasons: 0, vip_count: 0, ads_count: 0 };
       const dramaEps = epsBy.get(Number(d.id)) || [];
       // The season the viewer is on: that of their latest watched episode
       // there, else the lowest season.
@@ -705,6 +1181,8 @@ app.get('/api/feed', async (req, res) => {
         added_by_username: d.added_by_username,
         seasons: Number(c.seasons), episodes: Number(c.episodes),
         following: followed.has(Number(d.id)),
+        // Drama-level chip: VIP wins if any episode is VIP, then ads, then free.
+        access_label: Number(c.vip_count) > 0 ? 'VIP' : (Number(c.ads_count) > 0 ? 'Free with ads' : 'Free'),
         mine: req.user && Number(d.added_by_id) === Number(req.user.id),
         note,
       };
@@ -721,15 +1199,16 @@ app.get('/api/feed', async (req, res) => {
       next.following = followed.has(next.dramaId);
       next.season = next.hero.season;
       next.progress = seasonEps.length ? { watched: seasonWatched, total: seasonEps.length } : null;
+      next.hero = gateEpisode(next.hero, vip);
       next.hero.watched_by = heroRow ? heroRow.watchers : [];
       next.upcoming = next.later.map(e => ({
-        id: e.id, season: e.season, number: e.number, title: e.title, minutes: e.minutes,
+        ...gateEpisode(e, vip),
         watched_by: (dramaEps.find(x => x.id === e.id) || {}).watchers || [],
       }));
       delete next.hero.season;
       delete next.later;
     }
-    return res.json({ dramas: out, next });
+    return res.json({ vip, dramas: out, next });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: 'Feed failed to load' });
@@ -772,6 +1251,7 @@ app.delete('/api/dramas/:id', async (req, res) => {
 app.get('/api/dramas/:id', async (req, res) => {
   try {
     const viewerId = req.user ? req.user.id : null;
+    const vip = (await vipStatus(req)).vip;
     const d = await pool.query(
       `SELECT id, title, synopsis, added_by_id, added_by_username, created_at
          FROM dramas WHERE id = $1 AND ${demoClause(req, 'is_demo', 2)}`,
@@ -780,7 +1260,7 @@ app.get('/api/dramas/:id', async (req, res) => {
     if (!d.rows.length) return res.status(404).json({ error: 'Drama not found' });
     const drama = d.rows[0];
     const eps = await pool.query(
-      `SELECT e.id, e.season, e.number, e.title, e.minutes, e.watch_url,
+      `SELECT e.id, e.season, e.number, e.title, e.minutes, e.watch_url, e.access,
               e.added_by_id, e.added_by_username,
               ARRAY(SELECT w.username FROM watches w WHERE w.episode_id = e.id
                     ORDER BY w.watched_at) AS watched_by,
@@ -837,13 +1317,14 @@ app.get('/api/dramas/:id', async (req, res) => {
       seasons.get(e.season).push(e);
     }
     return res.json({
+      vip,
       drama: {
         ...drama, id: Number(drama.id), mine: req.user && Number(drama.added_by_id) === Number(req.user.id),
         rating_avg: ratingAvgRaw === null ? null : Math.round(ratingAvgRaw * 10) / 10,
         rating_count: ratingCount,
       },
       seasons: [...seasons.keys()].sort((a, b) => a - b),
-      episodes: eps.rows.map(e => ({ ...e, mine: req.user && Number(e.added_by_id) === Number(req.user.id) })),
+      episodes: eps.rows.map(e => ({ ...gateEpisode(e, vip), mine: req.user && Number(e.added_by_id) === Number(req.user.id) })),
       following,
       reviews,
       reviews_cursor: reviewCursor,
@@ -873,15 +1354,17 @@ app.post('/api/dramas/:id/episodes', async (req, res) => {
     if (!title || title.length > 80) return res.status(400).json({ error: 'A title of 1 to 80 characters is required' });
     if (minutes !== null && (minutes < 1 || minutes > 600)) return res.status(400).json({ error: 'Minutes must be 1 to 600' });
     if (watch_url && !/^https:\/\//.test(watch_url)) return res.status(400).json({ error: 'The link must start with https://' });
+    const access = typeof req.body.access === 'string' && req.body.access ? req.body.access : 'free';
+    if (!['free', 'vip', 'ads'].includes(access)) return res.status(400).json({ error: 'Access must be Free, VIP or Free with ads' });
     const exists = await pool.query(
       `SELECT 1 FROM episodes WHERE drama_id = $1 AND season = $2 AND number = $3`,
       [req.params.id, season, number]
     );
     if (exists.rows.length) return res.status(409).json({ error: 'That season and episode number already exists' });
     const r = await pool.query(
-      `INSERT INTO episodes (drama_id, season, number, title, minutes, watch_url, added_by_id, added_by_username)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [req.params.id, season, number, title, minutes, watch_url, req.user.id, req.user.username]
+      `INSERT INTO episodes (drama_id, season, number, title, minutes, watch_url, access, added_by_id, added_by_username)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [req.params.id, season, number, title, minutes, watch_url, access, req.user.id, req.user.username]
     );
     return res.status(201).json({ episode: r.rows[0] });
   } catch (err) {
@@ -935,8 +1418,12 @@ app.delete('/api/dramas/:id/follow', async (req, res) => {
 
 app.put('/api/episodes/:id/watched', async (req, res) => {
   try {
-    const e = await pool.query(`SELECT id FROM episodes WHERE id = $1`, [req.params.id]);
+    const e = await pool.query(`SELECT id, access FROM episodes WHERE id = $1`, [req.params.id]);
     if (!e.rows.length) return res.status(404).json({ error: 'Episode not found' });
+    // Server-side paywall: the write is refused and the answer explains why.
+    if (e.rows[0].access === 'vip' && !(await vipStatus(req)).vip) {
+      return res.status(403).json({ error: 'vip_required' });
+    }
     await pool.query(
       `INSERT INTO watches (user_id, username, episode_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
       [req.user.id, req.user.username, req.params.id]
@@ -1273,7 +1760,52 @@ app.delete('/api/dramas/:id/review', async (req, res) => {
   }
 });
 
+// Unknown API routes answer JSON 404, never the HTML shell: a client
+// that asked for JSON must not be handed a 200 HTML page it cannot parse.
+app.use('/api/', (req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
+// HTML shell: serve the app if authenticated. Unauthenticated top-level
+// visits (share links pasted into a browser — Sec-Fetch-Dest: document)
+// are sent to the platform's chromeless view of this app, where the shell
+// embeds it with a real token so the link just works. Every other
+// tokenless case (iframe loads with an expired token, old browsers
+// without Sec-Fetch-*) gets the "open in Homeroom" landing page instead
+// of a redirect, so the platform shell is never loaded INSIDE its own
+// app iframe and stray visits still don't reveal the app.
+// Registered LAST: a catch-all above the API routes would swallow every
+// GET /api/* request and answer it with HTML, which the client cannot
+// parse (the merged app's feed and drama routes live further up).
+app.get('*', (req, res) => {
+  if (!req.user && !req.guest) {
+    // Deep-link pass-through (platform #743): carry the visited
+    // path+query into the chromeless view so share links land on the
+    // shared screen, not Home. The clean platform route stores `path`
+    // as one encoded query value so an inner ?, &, or = survives. The
+    // character test keeps the
+    // value attribute-safe for the landing anchor below — anything
+    // unusual falls back to the bare link.
+    const deepPath = /^\/[A-Za-z0-9\-._~!$&()*+,;=:@\/%?]*$/.test(req.originalUrl)
+      ? '?path=' + encodeURIComponent(req.originalUrl) : '';
+    if (PLATFORM_ORIGIN && req.get('sec-fetch-dest') === 'document') {
+      return res.redirect(302, PLATFORM_ORIGIN + '/app/homeclip-73da27/full' + deepPath);
+    }
+    return res.status(401).send(`<!doctype html><meta charset=utf-8><title>Open in Homeroom</title>
+<body style="font-family:system-ui;background:#09090b;color:#e4e4e7;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0">
+  <div style="max-width:24rem;padding:2rem;text-align:center">
+    <h1 style="font-size:1.25rem;margin:0 0 0.5rem">Open this app inside Homeroom</h1>
+    <p style="color:#a1a1aa;font-size:0.9rem;margin:0 0 1.25rem">This page is served via the platform; direct visits aren't authenticated.</p>
+    <a href="${PLATFORM_ORIGIN}/app/homeclip-73da27/full${deepPath}" style="display:inline-block;padding:0.5rem 1rem;background:#7c3aed;color:white;border-radius:0.5rem;text-decoration:none;font-size:0.9rem">Open in Homeroom</a>
+  </div>
+</body>`);
+  }
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 // ── Boot ──────────────────────────────────────────────────────────────────
+
+let server = null;
 
 async function start() {
   // Idempotent schema on boot, then (staging only) the demo dramas.
@@ -1281,11 +1813,12 @@ async function start() {
   if (IS_STAGING) {
     try {
       await seedDemo();
+      await seedStagingVip();
     } catch (err) {
       console.error('demo seed failed', err);
     }
   }
-  const server = app.listen(port, () => console.log(`Listening on :${port}`));
+  server = app.listen(port, () => console.log(`Listening on :${port}`));
   // Let Envoy retire idle upstream connections at 60s, with a 15s margin.
   server.keepAliveTimeout = 75_000;
   // Stop accepting, drain about 3 s, close the pool and exit.
@@ -1298,5 +1831,25 @@ async function start() {
     });
   }
 }
+
+// Shut down cleanly: stop accepting connections, drain for ~3s, close the
+// pool, exit.
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received, shutting down`);
+  setTimeout(() => process.exit(0), 3000).unref();
+  try {
+    if (server) server.close();
+    await pool.end();
+    process.exit(0);
+  } catch (err) {
+    console.error(err);
+    process.exit(1);
+  }
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 start().catch(err => { console.error(err); process.exit(1); });

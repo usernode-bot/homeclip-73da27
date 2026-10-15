@@ -229,3 +229,7 @@ svg {width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;strok
 .toast {position:fixed;left:0;right:0;bottom:24px;z-index:60;display:flex;justify-content:center;pointer-events:none}
 
 .toast span {background:rgb(var(--fg));color:rgb(var(--ground));font-size:14px;font-weight:500;padding:8px 16px;border-radius:99px}
+/* VIP access chips: the kit's chip-vip / chip-soft, kept above the amber
+   "New episode" chip defined here. */
+.chip.chip-vip {background:rgb(var(--accent));color:rgb(var(--on-accent))}
+.chip.chip-soft {background:rgb(var(--raised));color:rgb(var(--muted))}

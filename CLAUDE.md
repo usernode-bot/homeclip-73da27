@@ -98,8 +98,13 @@ tables you've marked private), etc.
 Watch your homeroom's own serial drama together. The group adds the serial
 dramas it watches, season by season and episode by episode; each person
 follows the shows they like, marks episodes watched and sees which episode
-comes next. HomeClip plays no video itself: an episode can carry a link to
-wherever it is watched, which Watch opens in a new tab.
+comes next ("Next to watch"). HomeClip plays no video itself: an episode can
+carry a link to wherever it is watched, which Watch opens in a new tab.
+Episodes carry access levels — Free, VIP, Free with ads — and a HomeClip VIP
+subscription (Monthly / 3 Months / Yearly, billed in rupiah through Stripe in
+sandbox mode) unlocks VIP episodes, skips the pre-roll ad placeholder, and is
+managed from the VIP, Manage-subscription and Payment-history screens
+(`#/vip`, `#/vip/manage`, `#/vip/payments`).
 
 ## Design
 
@@ -111,8 +116,8 @@ Watch, on the next episode.
 
 - **Palette:** warm greys and white for the page (ground, surface, raised,
   line), deep teal as the accent (the TV screen, Following, the group's
-  notes, the `accent` token with `on-accent` on it), warm amber as the
-  action colour (the `action` token with `on-action` on it, and
+  notes, the `accent` token with `on-accent` on it, and the VIP chip), warm
+  amber as the action colour (the `action` token with `on-action` on it, and
   `action-soft` for the "New episode" tint). Danger stays the kit's red.
   Both looks follow the viewer's Homeroom theme; the token values live in
   `styles/tailwind-input.css`.
@@ -121,7 +126,8 @@ Watch, on the next episode.
   numbers on a drama's page sit in small TV screens. Progress is always one
   thin amber bar. Posters are flat colour tiles: each drama gets one of four
   colours (teal, amber, ink, slate) in turn, so nobody has to upload
-  anything.
+  anything. Access shows as a chip: the accent VIP chip with a lock icon
+  wherever access matters, a quiet chip for "Free with ads".
 - **Type scale:** `text-title` (28), `text-heading` (20), `text-body` (16),
   `text-small` (14). The typeface is the system's rounded face
   (`fontFamily` ui-rounded in `tailwind.config.js`), which feels friendly
@@ -130,9 +136,9 @@ Watch, on the next episode.
 The kit is in `styles/tailwind-input.css`: colour tokens with a light and
 a dark value (named in `tailwind.config.js`), and a few components
 (`page-column`, `btn-primary`, `btn-secondary`, `field`, `list`, `list-row`,
-`card`, `section-label`, `skeleton`, `state-empty`, `state-error`).
-Re-theme by changing the token values there, keeping every text pair at
-4.5:1 or more in both looks.
+`card`, `chip`, `chip-vip`, `chip-soft`, `section-label`, `skeleton`,
+`state-empty`, `state-error`). Re-theme by changing the token values there,
+keeping every text pair at 4.5:1 or more in both looks.
 
 - Colour comes only from the tokens (`bg-ground`, `bg-surface`,
   `text-fg`, `text-muted`, `border-line`, `bg-accent` with
@@ -155,15 +161,37 @@ Re-theme by changing the token values there, keeping every text pair at
 
 ## App-specific conventions
 
-- **Private tables:** `follows`, `watches` and `reports` are marked
-  `staging:private` (each person's own data). `dramas` and `episodes` are
-  public: the group's shared feed.
+- **Private tables:** `follows`, `watches`, `reports`, `subscriptions` and
+  `payments` are marked `staging:private` (each person's own data, and
+  financial data). `dramas`, `episodes` and `coupons` are not: the group's
+  shared feed and the promo codes.
 - **Demo data:** the five demo dramas and their episodes are seeded on boot
   in staging with fixed ids and `is_demo = true`; every API response without
   `?demo=1` leaves `is_demo` rows out, so the plain route stays
   production-shaped. The viewing account's own follows and watches are
-  written once, on its first `?demo=1` request.
+  written once, on its first `?demo=1` request. Demo episodes carry a mix of
+  access levels (Harbour Lights S2E6 and The Quiet Wing are VIP; S2E8 and
+  Meridian Court are Free with ads). Staging also seeds fake subscriptions,
+  payments and the `STAGE10` coupon for the shots' fixture accounts only.
 - **Vocabulary:** drama, season, episode, Follow, Following, Watch,
   watched, Next to watch, Continue this season, Drama feed, Add drama,
-  Add episode, Report, Remove. One idea, one word, everywhere.
-- Avoid adding new dependencies; the stack is Express, pg and Tailwind.
+  Add episode, Report, Remove, VIP, Free, Free with ads. One idea, one word,
+  everywhere.
+- **Money is integer rupiah, never floats.** IDR is zero-decimal in Stripe;
+  the `subscriptions`/`payments` tables and all display use whole rupiah
+  ("Rp 59.000", dot separators, formatted by hand so the format never
+  depends on the browser's Intl data).
+- **VIP is decided on the server only.** `vipStatus()` in `server.js` reads
+  the private `subscriptions` table against `req.now`; `gateEpisode()`
+  strips a locked episode's `watch_url`, and marking a VIP episode watched
+  is refused (403 `vip_required`). The client renders what it is given and
+  cannot unlock anything.
+- **"Now" comes from `req.now`** (already set by the platform middleware) —
+  renewal dates, expiry and coupon windows included — never `new Date()`
+  in decision code.
+- **No new runtime dependencies** for payments: Stripe goes over `fetch`
+  against its REST API; webhook signatures are verified with node `crypto`.
+  Adapters live in `providers/` (stripe implemented; midtrans/xendit are
+  structured stubs that answer 501 until built).
+- Stripe returns the browser to the path `/vip/return` (no hash); the
+  client's router handles it alongside the hash routes.
