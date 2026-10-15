@@ -46,6 +46,31 @@ export async function render({ view }) {
     view.appendChild(guestCard);
   }
 
+  // Things the account can do beyond settings: the profiles picker and
+  // the shared drama tracker's add form.
+  if (user) {
+    const links = el('<div class="list mt-5"></div>');
+    links.appendChild(el(
+      '<a class="list-row" data-nav href="/profiles">' +
+        '<span class="flex-1">' +
+          '<span class="block text-body text-fg">' + t('profiles.title') + '</span>' +
+          '<span class="block text-small text-muted">' + t('profiles.rowDesc') + '</span>' +
+        '</span>' +
+        icon('chevronLeft', 'h-5 w-5 rotate-180 text-muted') +
+      '</a>'
+    ));
+    links.appendChild(el(
+      '<a class="list-row" data-nav href="/add">' +
+        '<span class="flex-1">' +
+          '<span class="block text-body text-fg">' + t('add.title') + '</span>' +
+          '<span class="block text-small text-muted">' + t('add.rowDesc') + '</span>' +
+        '</span>' +
+        icon('chevronLeft', 'h-5 w-5 rotate-180 text-muted') +
+      '</a>'
+    ));
+    view.appendChild(links);
+  }
+
   // Settings
   const settingsEl = el('<div class="hc-settings mt-5"></div>');
   settingsEl.appendChild(el('<h2 class="section-label">' + t('profile.settings') + '</h2>'));

@@ -50,7 +50,10 @@
     { "id": "drama-no-reviews", "name": "Drama page without reviews", "path": "/tracker?demo=1#/drama/900003", "expectText": "No reviews yet" },
     { "id": "vip.page", "name": "VIP page with IDR plans", "path": "/tracker#/vip", "expectText": "Rp 59.000", "visual": true, "impact": ["public/tracker.html", "public/app.js", "public/screens.css", "server.js", "styles/**", "providers/**"] },
     { "name": "Manage subscription renders", "path": "/tracker#/vip/manage", "expectText": "Manage subscription" },
-    { "name": "Payment history renders", "path": "/tracker#/vip/payments", "expectText": "Payment history" }
+    { "name": "Payment history renders", "path": "/tracker#/vip/payments", "expectText": "Payment history" },
+    { "id": "profiles.screen", "name": "Profiles screen", "path": "/profiles", "expectText": "Add profile", "visual": true, "impact": ["public/js/views/profiles.js", "public/js/views/profile.js", "public/js/router.js", "styles/**", "server.js"] },
+    { "id": "add.screen", "name": "Add a drama screen", "path": "/add", "expectText": "Add a drama", "visual": true, "impact": ["public/js/views/add.js", "public/js/views/profile.js", "public/js/router.js", "styles/**"] },
+    { "name": "Profiles populated demo", "path": "/profiles?demo=1", "expectText": "Who's watching?" }
   ],
   "visibility": {
     "build": "public",

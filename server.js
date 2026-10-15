@@ -170,6 +170,14 @@ async function tableHasColumn(table, column) {
   return r.rowCount > 0;
 }
 
+const ARCHIVE_SUFFIX = '_legacy_pre_catalog';
+
+// One transaction per pair: the two halves of a rename can never be seen
+// separately, and a halfway failure rolls back instead of leaving a
+// database that poisons the next boot. Two boots racing each other are
+// handled by re-checking both names inside the transaction (the second
+// boot sees the target already there and recovers through the copy path)
+// and by catching the SQLSTATEs that say the rename already happened.
 async function migrateLegacyTrackerTables() {
   for (const [oldName, newName, catalogColumn] of LEGACY_TRACKER_TABLES) {
     if (!await tableExists(oldName)) continue;
@@ -178,12 +186,103 @@ async function migrateLegacyTrackerTables() {
       continue;
     }
     if (await tableExists(newName)) {
-      console.error(`[boot] legacy table ${oldName} and ${newName} both exist; ` +
-        `leaving ${oldName} untouched`);
+      await recoverBothExist(oldName, newName);
       continue;
     }
-    await pool.query(`ALTER TABLE ${oldName} RENAME TO ${newName}`);
-    console.log(`[boot] migrated legacy tracker table ${oldName} -> ${newName}`);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Re-check inside the transaction: another boot may have renamed
+      // (or created) the target between the check above and now.
+      const stillOld = await client.query(
+        'SELECT to_regclass($1) IS NOT NULL AS yes', ['public.' + oldName]);
+      const nowNew = await client.query(
+        'SELECT to_regclass($1) IS NOT NULL AS yes', ['public.' + newName]);
+      if (!stillOld.rows[0].yes) {
+        await client.query('ROLLBACK');
+        continue;
+      }
+      if (nowNew.rows[0].yes) {
+        await client.query('ROLLBACK');
+        await recoverBothExist(oldName, newName);
+        continue;
+      }
+      await client.query(`ALTER TABLE ${oldName} RENAME TO ${newName}`);
+      await client.query('COMMIT');
+      console.log(`[boot] migrated legacy tracker table ${oldName} -> ${newName}`);
+    } catch (err) {
+      try { await client.query('ROLLBACK'); } catch {}
+      // 42P01 (the legacy table vanished: another boot renamed it first)
+      // and 42710/42P07 (a constraint or index name the rename carries is
+      // already taken by the target) both mean the rename already ran
+      // elsewhere. Re-check and carry on; anything else propagates.
+      const benign = ['42P01', '42710', '42P07'].includes(err.code);
+      if (benign && await tableExists(newName)) {
+        console.log(`[boot] legacy table ${oldName} already renamed by another boot`);
+        continue;
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+// Both the legacy and the tracker_* table exist for one pair. Recover
+// without deleting anything: copy the legacy rows into the tracker_* table
+// on the columns the two shapes share (existing tracker rows win), then
+// rename the legacy table to an archived name so it stays readable for
+// inspection and stops this branch from running on every boot.
+async function recoverBothExist(oldName, newName) {
+  const shared = (await pool.query(`
+    SELECT a.column_name
+    FROM information_schema.columns a
+    JOIN information_schema.columns b
+      ON b.column_name = a.column_name
+    WHERE a.table_name = $1 AND a.table_schema = 'public'
+      AND b.table_name = $2 AND b.table_schema = 'public'
+    ORDER BY a.ordinal_position
+  `, [oldName, newName])).rows.map((r) => r.column_name);
+  if (!shared.length) {
+    console.error(`[boot] legacy table ${oldName} and ${newName} share no columns; ` +
+      `leaving ${oldName} untouched`);
+    return;
+  }
+  const list = shared.map((c) => `"${c}"`).join(', ');
+  const archived = `${oldName}${ARCHIVE_SUFFIX}`;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Re-check inside the transaction: another boot may have completed
+    // this same recovery between the check above and now.
+    const stillOld = await client.query(
+      'SELECT to_regclass($1) IS NOT NULL AS yes', ['public.' + oldName]);
+    if (!stillOld.rows[0].yes) {
+      await client.query('ROLLBACK');
+      return;
+    }
+    await client.query(
+      `INSERT INTO ${newName} (${list}) SELECT ${list} FROM ${oldName} ON CONFLICT DO NOTHING`);
+    const arch = await client.query(
+      'SELECT to_regclass($1) IS NOT NULL AS yes', ['public.' + archived]);
+    if (arch.rows[0].yes) {
+      // An archived copy from an earlier recovery already exists: keep
+      // both, under a name that cannot collide.
+      await client.query(`ALTER TABLE ${oldName} RENAME TO ${archived}_${Date.now()}`);
+    } else {
+      await client.query(`ALTER TABLE ${oldName} RENAME TO ${archived}`);
+    }
+    await client.query('COMMIT');
+    console.log(`[boot] legacy table ${oldName} and ${newName} both existed; ` +
+      `copied legacy rows into ${newName} and archived ${oldName} as ${archived}`);
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch {}
+    // Recovery is best-effort: a failure here must not block the boot
+    // (the catalog seed and every route come next). The legacy table is
+    // left in place and this logs loudly instead.
+    console.error(`[boot] could not recover both-exists state for ${oldName}: ${err.message}`);
+  } finally {
+    client.release();
   }
 }
 
@@ -236,9 +335,19 @@ CREATE TABLE IF NOT EXISTS settings (
   theme TEXT NOT NULL DEFAULT 'system',
   notifications BOOLEAN NOT NULL DEFAULT true
 );
+CREATE TABLE IF NOT EXISTS profiles (
+  id BIGSERIAL PRIMARY KEY,
+  account_id BIGINT NOT NULL,
+  name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 40),
+  language TEXT NOT NULL DEFAULT 'system',
+  is_demo BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS profiles_account_name_idx ON profiles(account_id, name);
 COMMENT ON TABLE my_list IS 'staging:private';
 COMMENT ON TABLE watch_progress IS 'staging:private';
 COMMENT ON TABLE settings IS 'staging:private';
+COMMENT ON TABLE profiles IS 'staging:private';
 `;
 
 // Seed the sample catalog (idempotent; the same content in staging and
@@ -315,6 +424,22 @@ function wantsDemo(req) {
   return IS_STAGING && req.query.demo === '1';
 }
 
+// The viewing account's demo PROFILES: two fake profiles written once on
+// the account's first ?demo=1 request, marked is_demo, so the Who's
+// watching screen can be seen populated. Plain requests exclude them, so
+// the production shape (no profiles until the person adds one) holds.
+const DEMO_PROFILES = ['Staging demo viewer', 'Staging demo kids'];
+async function seedViewerDemoProfiles(userId) {
+  for (const name of DEMO_PROFILES) {
+    await pool.query(
+      `INSERT INTO profiles (account_id, name, language, is_demo)
+       VALUES ($1,$2,'system',true)
+       ON CONFLICT (account_id, name) DO NOTHING`,
+      [userId, name]
+    );
+  }
+}
+
 const DRAMA_FIELDS = 'd.id, d.title, d.year, d.country, d.genres, d.rating, d.popularity, d.cast_names, d.synopsis_en, d.synopsis_id';
 
 // ── API ───────────────────────────────────────────────────────────────────
@@ -345,6 +470,83 @@ app.put('/api/settings', async (req, res) => {
     [req.user.id, lang, themeOk, notif]
   );
   res.json({ ok: true, settings: { language: lang, theme: themeOk, notifications: notif } });
+});
+
+// ── Profiles: per-account viewing profiles ("Who's watching?") ───────────
+// All reads and writes are the signed-in account's own rows. Guests get
+// the account_required shape; the client shows its sign-in prompt first.
+const PROFILE_CAP = 5;
+
+app.get('/api/profiles', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'account_required' });
+  const demo = wantsDemo(req);
+  if (demo) {
+    const has = await pool.query('SELECT 1 FROM profiles WHERE account_id = $1 LIMIT 1', [req.user.id]);
+    if (has.rowCount === 0) await seedViewerDemoProfiles(req.user.id);
+  }
+  const r = await pool.query(
+    `SELECT id, name, language, created_at FROM profiles
+      WHERE account_id = $1 ${demo ? '' : 'AND is_demo = false'}
+      ORDER BY created_at, id`,
+    [req.user.id]
+  );
+  res.json({ profiles: r.rows.map((p) => ({ ...p, id: Number(p.id) })) });
+});
+
+app.post('/api/profiles', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'account_required' });
+  const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
+  const language = ['system', 'en', 'id'].includes(req.body.language) ? req.body.language : 'system';
+  if (!name || name.length > 40) {
+    return res.status(400).json({ error: 'profile_name' });
+  }
+  const count = await pool.query('SELECT COUNT(*)::int AS n FROM profiles WHERE account_id = $1', [req.user.id]);
+  if (count.rows[0].n >= PROFILE_CAP) {
+    return res.status(400).json({ error: 'profile_cap' });
+  }
+  try {
+    const r = await pool.query(
+      `INSERT INTO profiles (account_id, name, language) VALUES ($1,$2,$3)
+       RETURNING id, name, language, created_at`,
+      [req.user.id, name, language]
+    );
+    return res.status(201).json({ profile: { ...r.rows[0], id: Number(r.rows[0].id) } });
+  } catch (err) {
+    if (err.code === '23505') return res.status(400).json({ error: 'profile_taken' });
+    throw err;
+  }
+});
+
+app.patch('/api/profiles/:id', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'account_required' });
+  const cur = await pool.query('SELECT id FROM profiles WHERE id = $1 AND account_id = $2', [req.params.id, req.user.id]);
+  if (!cur.rows.length) return res.status(404).json({ error: 'profile_not_found' });
+  const patch = req.body || {};
+  const name = typeof patch.name === 'string' ? patch.name.trim() : '';
+  if (!name || name.length > 40) return res.status(400).json({ error: 'profile_name' });
+  const language = ['system', 'en', 'id'].includes(patch.language) ? patch.language : 'system';
+  try {
+    const r = await pool.query(
+      `UPDATE profiles SET name = $3, language = $4 WHERE id = $1 AND account_id = $2
+       RETURNING id, name, language, created_at`,
+      [req.params.id, req.user.id, name, language]
+    );
+    return res.json({ profile: { ...r.rows[0], id: Number(r.rows[0].id) } });
+  } catch (err) {
+    if (err.code === '23505') return res.status(400).json({ error: 'profile_taken' });
+    throw err;
+  }
+});
+
+app.delete('/api/profiles/:id', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'account_required' });
+  const cur = await pool.query('SELECT id FROM profiles WHERE id = $1 AND account_id = $2', [req.params.id, req.user.id]);
+  if (!cur.rows.length) return res.status(404).json({ error: 'profile_not_found' });
+  const left = await pool.query(
+    'SELECT COUNT(*)::int AS n FROM profiles WHERE account_id = $1 AND is_demo = false', [req.user.id]);
+  if (left.rows[0].n <= 1) return res.status(400).json({ error: 'profile_last' });
+  await pool.query('DELETE FROM profiles WHERE id = $1 AND account_id = $2', [req.params.id, req.user.id]);
+  res.json({ ok: true });
 });
 
 // Everything the Home screen needs, in one round trip.

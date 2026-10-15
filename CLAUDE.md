@@ -191,10 +191,17 @@ keeping every text pair at 4.5:1 or more in both looks.
   extensionless URL (`/sample/clip`); the player appends `.webm` and
   `.mp4` and offers both as `<source>` elements, so the browser picks a
   codec it supports.
-- **Per-user tables are `staging:private`:** `my_list`, `watch_progress`
-  and `settings`. `?demo=1` (staging) seeds the viewing account demo rows
-  marked `is_demo`; responses without `?demo=1` exclude those rows so
-  plain routes stay production-shaped.
+- **Per-user tables are `staging:private`:** `my_list`, `watch_progress`,
+  `settings` and `profiles`. `?demo=1` (staging) seeds the viewing account
+  demo rows marked `is_demo`; responses without `?demo=1` exclude those
+  rows so plain routes stay production-shaped.
+- **Profiles and Add a drama (catalog side):** `/profiles` is the signed-in
+  account's "Who's watching?" picker (per-account `profiles` table,
+  `/api/profiles` CRUD, cap of 5, last-profile guard; selection kept in
+  `localStorage hc:profile`, a profile's language applied on pick).
+  `/add` is a catalog-side form that adds a drama to the shared tracker
+  via `POST /api/tracker/dramas` (the tracker's own Add drama sheet is the
+  other entry point; same rules). Both are reached from the Profile screen.
 - **Progress saving is throttled** (every 5 s while playing, plus on
   pause, pagehide and view unmount) and only stored for signed-in
   viewers; guests can browse and watch but never write.
