@@ -1,17 +1,19 @@
-/* The screens the spec drew, carried over by the platform before the first
-   version was built (screen 1 is public/index.html's main screen; screen 2,
-   if any, its <template data-spec-screen="2">). Colours are the design kit's
-   tokens, rgb(var(--accent)), so they follow the light and the dark look. */
+/* The screens the spec drew (public/index.html's data-spec-screen blocks).
+   Colours are the design kit's tokens, rgb(var(--accent)), so they follow
+   the light and the dark look. The screen-1 and screen-2 rule sets the
+   template carried were consolidated here: one .app, .top, .btn-primary and
+   .bar, then each screen's own rules below its comment. */
 
 /* Each screen is one centred column: the phone width it was drawn at grows
    to a readable column on a wider window, never rows and buttons stretched
    across the window. Remove this only for an app that fills the window by
-   design, such as a map. */
+   design, such as a map. The watch view runs wider so the video has room. */
 [data-spec-screen] {
   width: 100%;
   max-width: 420px;
   margin-inline: auto;
 }
+#view-watch { max-width: 560px; }
 
 /* hidden beats the components' display:inline-flex, which would otherwise
    win over Tailwind preflight's [hidden] rule (this file loads after it). */
@@ -19,7 +21,6 @@
 
 .app {
   width: 100%;
-  min-height: 1100px;
   background: rgb(var(--ground));
   color: rgb(var(--fg));
   font-family: ui-rounded,system-ui,sans-serif;
@@ -34,25 +35,48 @@
 .top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px 8px;
+  gap: 4px;
+  padding: 8px 20px;
 }
 
-.brand {display:flex;align-items:center;gap:8px;font-size:20px;line-height:28px;font-weight:600}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 600;
+  margin-right: auto;
+}
+
+/* The header's right-hand cluster: Downloads, Language, Add drama. */
+.top-actions {display:flex;align-items:center;gap:4px}
 
 .pad {padding:0 20px}
 
 .section-label {font-size:14px;line-height:20px;font-weight:500;color:rgb(var(--muted));margin:20px 0 8px;padding:0 1px}
 
+.icon-btn {width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;border:0;background:none;color:rgb(var(--fg));border-radius:8px}
+
 .btn-primary {display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:0 18px;border-radius:8px;background:rgb(var(--action));color:rgb(var(--on-action));font-size:16px;font-weight:600;border:0;font-family:inherit}
 
 .btn-secondary {display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:0 14px;border-radius:8px;background:rgb(var(--surface));border:1px solid rgb(var(--line));color:rgb(var(--fg));font-size:14px;font-weight:500;font-family:inherit}
 
+.link {min-height:44px;display:inline-flex;align-items:center;gap:6px;padding:0 8px;border:0;background:none;font:inherit;font-size:14px;color:rgb(var(--muted))}
+
+svg {width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+.small, .sm {font-size:14px;line-height:20px}
+
+.muted {color:rgb(var(--muted))}
+
+.grow {flex:1;min-width:0}
+
+/* ── Screen 1: the drama feed ──────────────────────────────────────────── */
+
 .hero {background:rgb(var(--surface));border:1px solid rgb(var(--line));border-radius:14px;padding:12px}
 
 .tv {position:relative;height:150px;border-radius:12px;background:rgb(var(--accent));color:rgb(var(--on-accent));padding:14px;display:flex;flex-direction:column;justify-content:flex-end;border:5px solid rgb(var(--fg))}
-
-.tv small,.sm {font-size:14px;line-height:20px}
 
 .h {font-size:20px;line-height:28px;font-weight:600}
 
@@ -64,7 +88,9 @@
 
 .tv .bar i {background:rgb(var(--on-accent))}
 
-.muted {color:rgb(var(--muted))}
+/* Next-to-watch and Continue this season stack on a phone, sit side by
+   side from 640px (the hero keeps most of the room). */
+.next-grid {display:flex;flex-direction:column;gap:4px}
 
 .row {display:flex;gap:12px;overflow:hidden}
 
@@ -82,7 +108,10 @@
 
 .poster {width:48px;height:68px;border-radius:6px;flex:none}
 
-.grow {flex:1;min-width:0}
+/* The drama page's poster is bigger than the feed rows'. */
+.head .poster {width:72px;height:102px;border-radius:8px}
+
+.title {font-size:28px;line-height:34px;font-weight:700;margin:0}
 
 .tag {font-size:14px;color:rgb(var(--accent));font-weight:500}
 
@@ -90,48 +119,11 @@
 
 .fol {border:1px solid rgb(var(--accent));color:rgb(var(--accent));border-radius:8px;min-height:44px;padding:0 12px;display:inline-flex;align-items:center;font-size:14px;font-weight:500;background:none;font-family:inherit}
 
-svg {width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
-
-/* Screen 2: its rules the first screen has not got. */
-
-.app {
-  width: 100%;
-  min-height: 1000px;
-  background: rgb(var(--ground));
-  color: rgb(var(--fg));
-  font-family: ui-rounded,system-ui,sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  padding: 0 0 32px;
-  box-sizing: border-box;
-}
-
-.top {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 20px;
-}
-
-.icon-btn {width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;border:0;background:none;color:rgb(var(--fg));border-radius:8px}
-
-.btn-primary {display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:0 16px;border-radius:8px;background:rgb(var(--action));color:rgb(var(--on-action));font-size:14px;font-weight:600;border:0;font-family:inherit}
-
-.head {display:flex;gap:16px;align-items:flex-start}
-
-.poster {width:72px;height:102px;border-radius:8px;flex:none;background:rgb(var(--accent))}
-
-.title {font-size:28px;line-height:34px;font-weight:700;margin:0}
-
-.sm {font-size:14px;line-height:20px}
-
 .seg {display:flex;background:rgb(var(--raised));border-radius:10px;padding:3px;gap:3px}
 
 .seg button {flex:1;min-height:44px;border:0;border-radius:8px;background:none;font:inherit;font-size:14px;font-weight:500;color:rgb(var(--muted))}
 
 .seg button.on {background:rgb(var(--surface));color:rgb(var(--fg));box-shadow:0 0 0 1px rgb(var(--line))}
-
-.bar {height:4px;border-radius:2px;background:rgb(var(--line));overflow:hidden;margin:12px 0 4px}
 
 .scr {width:56px;height:38px;border-radius:6px;border:3px solid rgb(var(--fg));background:rgb(var(--raised));display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;flex:none}
 
@@ -143,4 +135,218 @@ svg {width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;strok
 
 .foot {display:flex;gap:8px;flex-wrap:wrap;margin-top:20px}
 
-.link {min-height:44px;display:inline-flex;align-items:center;gap:6px;padding:0 8px;border:0;background:none;font:inherit;font-size:14px;color:rgb(var(--muted))}
+/* The offline strip: thin, at the very top, in the action colour. */
+.offline-banner {
+  background: rgb(var(--action-soft));
+  color: rgb(var(--action));
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  text-align: center;
+  padding: 6px 16px;
+}
+
+/* The footer's legal links: quiet, centred, out of the feed's way. */
+.foot-legal {display:flex;gap:4px;justify-content:center;margin-top:28px;flex-wrap:wrap}
+.foot-legal a {min-height:44px;display:inline-flex;align-items:center;padding:0 8px;font-size:14px;color:rgb(var(--muted));text-decoration:none}
+
+/* ── Screen 3: the watch view ──────────────────────────────────────────── */
+
+/* The player is a TV screen: dark bezel, 16:9, everything over it. */
+.player {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #0c0a09;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+#player-video {position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+
+.p-bigplay {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 64px;
+  height: 64px;
+  border-radius: 999px;
+  border: 0;
+  background: rgb(var(--action));
+  color: rgb(var(--on-action));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.p-bigplay svg {width:28px;height:28px}
+
+.p-controls {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  padding: 24px 12px 10px;
+  background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,0.65));
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: opacity 0.25s ease;
+}
+.p-controls.p-hidden {opacity:0}
+
+.p-bar {background: rgba(255,255,255,0.25);margin:0;cursor:pointer}
+.p-bar i {background: rgb(var(--action))}
+
+.p-timerow {display:flex;justify-content:space-between;font-size:12px;line-height:18px;color:rgba(255,255,255,0.85);font-variant-numeric:tabular-nums}
+
+.p-ctlrow {display:flex;align-items:center;gap:6px;margin-top:2px}
+
+.p-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.12);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+.p-pill svg {width:16px;height:16px}
+.p-pill.p-amber {background: rgb(var(--action)); color: rgb(var(--on-action))}
+.p-pill.p-on {background: rgba(255,255,255,0.28)}
+
+/* Overlay: resume prompt, next-episode countdown, the CC and quality
+   menus. Sits over everything, centred. */
+.p-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.45);
+  padding: 16px;
+  z-index: 2;
+}
+
+.p-ovcard {
+  background: rgba(12,10,9,0.92);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  padding: 16px;
+  color: #fff;
+  max-width: 300px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: center;
+}
+.p-ovcard .sm {color: rgba(255,255,255,0.75)}
+.p-ovrow {display:flex;gap:8px;justify-content:center}
+.p-ovrow .btn-primary, .p-ovrow .btn-secondary {min-height:40px;font-size:14px;padding:0 14px}
+
+.p-menu {
+  background: rgba(12,10,9,0.95);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  padding: 6px;
+  min-width: 170px;
+  max-height: 100%;
+  overflow-y: auto;
+}
+.p-menu-label {font-size:12px;line-height:16px;font-weight:600;color:rgba(255,255,255,0.6);padding:8px 10px 4px;text-align:start}
+.p-menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  text-align: start;
+}
+.p-menu-row.p-on {color: rgb(var(--action));font-weight:600}
+
+/* ── Screen 4: the downloads view ──────────────────────────────────────── */
+
+.dl-tile {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  background: rgb(var(--action-soft));
+  color: rgb(var(--action));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.dl-tile svg {width:22px;height:22px}
+
+/* The VIP upsell: its own card at the top of the list, not a row of it. */
+.dl-upsell {
+  list-style: none;
+  padding: 16px;
+  margin-bottom: 12px;
+  border: 1px solid rgb(var(--line));
+  border-radius: 12px;
+  background: rgb(var(--surface));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dl-upsell .btn-primary {align-self:flex-start}
+
+/* ── The language sheet ────────────────────────────────────────────────── */
+
+.lang-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+.lang-row:hover, .lang-row:focus-visible {background: rgb(var(--raised))}
+.lang-row[aria-current="true"] {color: rgb(var(--accent));font-weight:600}
+.lang-on {color: rgb(var(--accent))}
+
+/* ── Right-to-left: the back chevrons point the other way ──────────────── */
+
+[dir="rtl"] #back-btn svg,
+[dir="rtl"] #watch-back svg,
+[dir="rtl"] #dl-back svg {transform: scaleX(-1)}
+
+/* ── Wider windows ─────────────────────────────────────────────────────── */
+
+@media (min-width: 640px) {
+  .next-grid {flex-direction: row; gap: 24px}
+  .next-grid > div:first-child {flex: 1.2}
+  .next-grid > div:last-child {flex: 1}
+  .next-grid > div:last-child .section-label {margin-top: 20px}
+  /* The sheets read as centred dialogs on a desk, not bottom trays. */
+  .sheet {
+    inset: 0;
+    margin: auto;
+    bottom: auto;
+    height: fit-content;
+    max-height: calc(100vh - 48px);
+    border-radius: 16px;
+  }
+  .sheet > div {border-radius: 16px; border-bottom-width: 1px; padding-bottom: 16px}
+}
+@media (min-width: 1024px) {
+  #view-watch {max-width: 760px}
+  .player {border-radius: 14px}
+}

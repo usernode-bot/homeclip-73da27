@@ -2,6 +2,11 @@
  * with hash routes #/ and #/drama/:id, sheets for Add drama, Add episode,
  * episode details and Report. The markup and classes are the ones the spec's
  * screens drew; this script only fills them from data and wires the actions.
+ *
+ * Phase 5 adds: path routes (/drama/:id, /watch/:id, /downloads), the watch
+ * and downloads views (run by their own lazily loaded scripts), offline
+ * caching with a durable write queue, first-party analytics and error
+ * capture, the language sheet, sheet focus management, and per-view titles.
  */
 (function () {
   'use strict';
@@ -35,6 +40,118 @@
     });
   }
 
+  // ── Offline: cached reads and a durable write queue ─────────────────────
+  // Per-user namespaces, keyed by the account id remembered from the last
+  // authenticated load ("hc-me"). An offline launch has no ?token=, so the
+  // namespace is never wiped when the token is absent — that would delete
+  // the real user's saved data on the first offline boot.
+  function meCacheKey() { return 'hc-me'; }
+  function cacheKey(suffix) {
+    return 'hc-cache:' + (HC.viewerId() || 'anon') + (suffix ? ':' + suffix : '');
+  }
+  function queueKey() { return 'hc-queue:' + (HC.viewerId() || 'anon'); }
+
+  function readJSON(key, fallback) {
+    try {
+      var raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : fallback;
+    } catch (e) { return fallback; }
+  }
+  function writeJSON(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
+  }
+
+  function offlineBanner(show, text) {
+    var b = $('offline-banner');
+    if (!b) return;
+    b.hidden = !show;
+    if (show) b.textContent = text || i18n.t('offline_banner');
+  }
+
+  // A mutation the queue covers: on a network failure it is stored and
+  // replayed on reconnect; other failures (a conflict, an account wall)
+  // surface as today.
+  function queuedApi(path, opts) {
+    return api(path, opts).catch(function (err) {
+      var network = err.status === undefined || err.status === 0;
+      if (network && 'onLine' in navigator && !navigator.onLine) {
+        var q = readJSON(queueKey(), []);
+        q.push({ path: path, method: opts.method, body: opts.body });
+        writeJSON(queueKey(), q);
+        offlineBanner(true, i18n.t('offline_queued'));
+        return { queued: true };
+      }
+      throw err;
+    });
+  }
+
+  function replayQueue() {
+    var q = readJSON(queueKey(), []);
+    if (!q.length) return;
+    var next = q[0];
+    api(next.path, { method: next.method, body: next.body }).then(function () {
+      q.shift();
+      writeJSON(queueKey(), q);
+      if (q.length) replayQueue();
+      else { offlineBanner(false); route(); }
+    }).catch(function (err) {
+      if (err.status === undefined) return; // still offline; keep waiting
+      q.shift(); // a real refusal (gone, conflict) is not replayed forever
+      writeJSON(queueKey(), q);
+      if (q.length) replayQueue(); else route();
+    });
+  }
+  window.addEventListener('online', function () { replayQueue(); });
+
+  // ── Analytics and error capture (first-party; guests are skipped) ───────
+  var eventBuf = [];
+  function track(name, props) {
+    if (isGuest || !viewerId) return;
+    eventBuf.push({ name: name, props: props || null, path: location.pathname + location.hash, ts: Date.now() });
+    if (eventBuf.length >= 10) flushEvents();
+  }
+  function flushEvents() {
+    if (!eventBuf.length) return;
+    var batch = eventBuf.splice(0);
+    api('events', { method: 'POST', body: { events: batch } }).catch(function (err) {
+      if (err.status === undefined) eventBuf = batch.concat(eventBuf); // offline: keep for later
+    });
+  }
+  window.addEventListener('pagehide', function () {
+    flushEvents();
+    var watch = window.HCWatch; // only present once the watch view has loaded
+    if (watch && watch.active() && viewerId) {
+      // keepalive so the position survives the page going away
+      var pos = watch.currentPosition();
+      if (pos !== null) {
+        api('episodes/' + watch.active() + '/progress', { method: 'PUT', body: { position_s: pos, duration_s: watch.currentDuration() } }).catch(function () {});
+      }
+    }
+  });
+  setInterval(flushEvents, 30_000);
+
+  var errTimes = [];
+  function reportError(message, stack) {
+    if (isGuest || !viewerId) return;
+    var now = Date.now();
+    errTimes = errTimes.filter(function (t) { return now - t < 60_000; });
+    if (errTimes.length >= 5) return;
+    errTimes.push(now);
+    fetch('/api/client-errors' + (DEMO ? '?demo=1' : ''), {
+      method: 'POST', keepalive: true,
+      headers: Object.assign({ 'Content-Type': 'application/json' }, TOKEN ? { 'x-usernode-token': TOKEN } : {}),
+      body: JSON.stringify({ message: String(message).slice(0, 500), stack: stack ? String(stack).slice(0, 2000) : null, path: location.pathname + location.hash }),
+    }).catch(function () {});
+  }
+  window.addEventListener('error', function (e) {
+    reportError(e.message || 'Error', e.error && e.error.stack);
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    var r = e.reason;
+    reportError(r && (r.message || String(r)), r && r.stack);
+  });
+
+  // ── Shared helpers and the bridge other scripts use ─────────────────────
   // Posters are flat colour tiles; each drama gets one of four colours in
   // turn: teal, amber, ink, slate. Keyed off the id so both screens agree.
   var POSTER_COLORS = [
@@ -68,25 +185,64 @@
 
   var $ = function (id) { return document.getElementById(id); };
   var viewerName = null;
+  var viewerId = null;
   var isGuest = false;
+  var viewerVip = false;
 
-  // ── Sheets ──────────────────────────────────────────────────────────────
+  // watch.js and downloads.js, and the language sheet, talk to this page
+  // through HC instead of reaching into its closures.
+  window.HC = {
+    api: api,
+    queuedApi: queuedApi,
+    esc: esc,
+    svg: svg,
+    t: function (k, v) { return i18n.t(k, v); },
+    track: track,
+    posterColor: posterColor,
+    viewer: function () { return { id: viewerId, name: viewerName, guest: isGuest, vip: viewerVip }; },
+    viewerId: function () { return viewerId; },
+    showSheet: showSheet,
+    hideSheet: hideSheet,
+  };
+
+  // ── Sheets, with Escape, focus trap and focus restore ───────────────────
 
   var openSheet = null;
+  var sheetOpener = null;
+  function focusablesIn(el) {
+    return Array.prototype.filter.call(
+      el.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
+      function (n) { return !n.disabled && n.offsetParent !== null; }
+    );
+  }
   function showSheet(id) {
+    if (!openSheet) sheetOpener = document.activeElement;
     hideSheet();
     openSheet = $(id);
     openSheet.classList.remove('hidden');
     $('sheet-backdrop').classList.remove('hidden');
+    var f = focusablesIn(openSheet);
+    if (f.length) f[0].focus();
   }
   function hideSheet() {
     if (openSheet) openSheet.classList.add('hidden');
     openSheet = null;
     $('sheet-backdrop').classList.add('hidden');
+    if (sheetOpener && sheetOpener.focus) { sheetOpener.focus(); sheetOpener = null; }
   }
   $('sheet-backdrop').addEventListener('click', hideSheet);
   Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (b) {
     b.addEventListener('click', hideSheet);
+  });
+  document.addEventListener('keydown', function (e) {
+    if (!openSheet) return;
+    if (e.key === 'Escape') { e.preventDefault(); hideSheet(); return; }
+    if (e.key !== 'Tab') return;
+    var f = focusablesIn(openSheet);
+    if (!f.length) return;
+    var first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   });
 
   // ── Home: the drama feed ────────────────────────────────────────────────
@@ -115,7 +271,7 @@
     list.innerHTML = row() + row() + row() + row();
   }
 
-  function renderHomeError() {
+  function renderHomeError(cached) {
     $('next-section').hidden = true;
     $('feed-label').hidden = true;
     var list = $('feed-list');
@@ -124,20 +280,21 @@
     var state = $('home-state');
     state.hidden = false;
     state.innerHTML =
-      '<div class="state-error"><div class="text-body font-semibold">The feed could not be loaded</div>' +
-      '<p class="text-small" style="color:rgb(var(--muted))">Nothing you marked was lost. Check your connection and try again.</p>' +
-      '<button id="retry-btn" class="btn-secondary">Retry</button></div>';
+      '<div class="state-error"><div class="text-body font-semibold">' + esc(i18n.t('feed_error_title')) + '</div>' +
+      '<p class="text-small" style="color:rgb(var(--muted))">' + esc(i18n.t('state_error_body')) + '</p>' +
+      '<button id="retry-btn" class="btn-secondary">' + esc(i18n.t('retry')) + '</button></div>';
     $('retry-btn').addEventListener('click', loadHome);
+    offlineBanner(!!cached);
   }
 
   function heroHtml(next) {
     var pct = next.progress ? Math.round((next.progress.watched / next.progress.total) * 100) : 0;
-    $('hero-season').textContent = next.dramaTitle + ', Season ' + next.season;
-    $('hero-title').textContent = 'Episode ' + next.hero.number + ': ' + next.hero.title;
+    $('hero-season').textContent = i18n.t('hero_label', { drama: next.dramaTitle, s: next.season });
+    $('hero-title').textContent = i18n.t('episode_n_colon', { n: next.hero.number, title: next.hero.title });
     $('hero-bar').style.width = pct + '%';
     $('hero-note').innerHTML =
-      (next.progress ? esc(next.progress.watched + ' of ' + next.progress.total + ' watched this season') + '<br>' : '') +
-      esc(next.hero.minutes ? next.hero.minutes + ' min' : '');
+      (next.progress ? esc(i18n.t('watched_progress', { watched: next.progress.watched, total: next.progress.total })) + '<br>' : '') +
+      esc(next.hero.minutes ? i18n.t('n_min', { n: next.hero.minutes }) : '');
     $('hero-watch').onclick = function () { watchEpisode(next.hero, loadHome); };
   }
 
@@ -145,7 +302,7 @@
     var row = $('upcoming-row');
     row.innerHTML = next.upcoming.map(function (e) {
       return '<div class="ep" data-drama="' + next.dramaId + '">' +
-        '<div class="scr">Ep ' + e.number + '</div><div class="foot"></div>' +
+        '<div class="scr">' + esc(i18n.t('ep_n', { n: e.number })) + '</div><div class="foot"></div>' +
         '<div class="sm">' + esc(e.title) + '</div></div>';
     }).join('');
     Array.prototype.forEach.call(row.children, function (el) {
@@ -155,27 +312,47 @@
     });
   }
 
+  // The feed's one note per drama, composed here from the numbers and
+  // names the server sends (server.js carries no words).
+  function noteText(d) {
+    var n = d.note;
+    if (!n || n.kind === 'none') return '';
+    if (n.kind === 'no_episodes') return i18n.t('no_episodes_yet');
+    if (n.kind === 'progress') return i18n.t('watched_progress', { watched: n.watched, total: n.total });
+    if (n.kind === 'new') return i18n.t('new_episode');
+    if (n.kind === 'finished') return i18n.t('you_finished');
+    if (n.kind === 'others') {
+      if (n.names.length === 1) return i18n.t('watched_by', { names: n.names[0] });
+      if (n.more === 0) return i18n.t('watched_by_two', { a: n.names[0], b: n.names[1] });
+      return i18n.t('watched_by_more', { a: n.names[0], b: n.names[1], n: n.more });
+    }
+    return '';
+  }
+
   function feedRowHtml(d, viewerName) {
     var note;
-    if (d.note.kind === 'progress') {
+    var text = noteText(d);
+    if (d.note && d.note.kind === 'progress') {
       var pct = Math.round(d.note.pct * 100);
-      note = '<div class="bar" style="margin-top:6px" aria-label="' + esc(d.note.text) + '"><i style="width:' + pct + '%"></i></div>';
-    } else if (d.note.kind === 'new') {
-      note = '<span class="chip">New episode</span>';
-    } else if (d.note.kind === 'others' || d.note.kind === 'finished') {
-      note = '<div class="sm tag">' + esc(d.note.text) + '</div>';
-    } else if (d.note.text) {
-      note = '<div class="sm muted">' + esc(d.note.text) + '</div>';
+      note = '<div class="bar" style="margin-top:6px" aria-label="' + esc(text) + '"><i style="width:' + pct + '%"></i></div>';
+    } else if (d.note && d.note.kind === 'new') {
+      note = '<span class="chip">' + esc(text) + '</span>';
+    } else if (d.note && (d.note.kind === 'others' || d.note.kind === 'finished')) {
+      note = '<div class="sm tag">' + esc(text) + '</div>';
+    } else if (text) {
+      note = '<div class="sm muted">' + esc(text) + '</div>';
     } else {
       note = '';
     }
     var follow = d.following
-      ? '<button class="fol" data-follow="' + d.id + '" data-on="1">Following</button>'
-      : '<button class="btn-secondary" data-follow="' + d.id + '">Follow</button>';
-    return '<li class="list-row"><a href="#/drama/' + d.id + '" class="poster" style="background:' + posterColor(d.id) + ';display:block" aria-label="Open ' + esc(d.title) + '"></a>' +
+      ? '<button class="fol" data-follow="' + d.id + '" data-on="1" aria-pressed="true">' + esc(i18n.t('following')) + '</button>'
+      : '<button class="btn-secondary" data-follow="' + d.id + '" aria-pressed="false">' + esc(i18n.t('follow')) + '</button>';
+    var seasons = i18n.t(d.seasons === 1 ? 'seasons_1' : 'seasons_n', { n: d.seasons });
+    var episodes = i18n.t(d.episodes === 1 ? 'episodes_1' : 'episodes_n', { n: d.episodes });
+    return '<li class="list-row"><a href="#/drama/' + d.id + '" class="poster" style="background:' + posterColor(d.id) + ';display:block" aria-label="' + esc(i18n.t('open_drama', { title: d.title })) + '"></a>' +
       '<a class="grow" href="#/drama/' + d.id + '" style="text-decoration:none;color:inherit">' +
       '<div style="font-weight:600">' + esc(d.title) + '</div>' +
-      '<div class="sm muted">' + d.seasons + (d.seasons === 1 ? ' season, ' : ' seasons, ') + d.episodes + (d.episodes === 1 ? ' episode' : ' episodes') + '</div>' +
+      '<div class="sm muted">' + esc(seasons + ', ' + episodes) + '</div>' +
       note + '</a>' + follow + '</li>';
   }
 
@@ -193,7 +370,7 @@
       $('next-section').hidden = true;
     }
 
-    var label = 'Drama feed' + (DEMO ? ' <span data-usernode-demo-note>(Staging demo)</span>' : '');
+    var label = i18n.t('drama_feed') + (DEMO ? ' <span data-usernode-demo-note>(Staging demo)</span>' : '');
     var labelEl = $('feed-label');
     labelEl.innerHTML = label;
     list.hidden = false;
@@ -208,9 +385,9 @@
       $('add-drama-btn').hidden = true;
       state.hidden = false;
       state.innerHTML =
-        '<div class="state-empty"><div class="text-heading">No dramas yet</div>' +
-        '<p class="text-small" style="color:rgb(var(--muted))">Add the first drama your group watches.</p>' +
-        '<button id="empty-add-drama" class="btn-primary">Add drama</button></div>';
+        '<div class="state-empty"><div class="text-heading">' + esc(i18n.t('no_dramas_title')) + '</div>' +
+        '<p class="text-small" style="color:rgb(var(--muted))">' + esc(i18n.t('no_dramas_body')) + '</p>' +
+        '<button id="empty-add-drama" class="btn-primary">' + esc(i18n.t('add_drama')) + '</button></div>';
       $('empty-add-drama').addEventListener('click', function () { openAddDrama(); });
       return;
     }
@@ -220,8 +397,8 @@
     Array.prototype.forEach.call(list.querySelectorAll('[data-follow]'), function (b) {
       b.addEventListener('click', function () {
         var on = b.getAttribute('data-on') === '1';
-        api('dramas/' + b.getAttribute('data-follow') + '/follow', { method: on ? 'DELETE' : 'PUT' })
-          .then(loadHome)
+        queuedApi('dramas/' + b.getAttribute('data-follow') + '/follow', { method: on ? 'DELETE' : 'PUT' })
+          .then(function (r) { if (!r.queued) loadHome(); })
           .catch(function () { loadHome(); });
       });
     });
@@ -230,18 +407,31 @@
   function loadHome() {
     var token = ++homeLoad;
     renderHomeSkeleton();
-    api('feed').then(function (data) {
+    // The feed fetch and /api/me run in parallel; both settle before the
+    // rows render (the rows name the viewer in "watched by you").
+    var feedP = api('feed');
+    Promise.all([mePromise, feedP]).then(function (results) {
+      var data = results[1];
       if (token !== homeLoad) return;
+      writeJSON(cacheKey('feed'), data);
+      offlineBanner(false);
       renderHome(data);
-    }).catch(function () {
+    }).catch(function (err) {
       if (token !== homeLoad) return;
+      var cached = readJSON(cacheKey('feed'), null);
+      if (cached) { renderHome(cached); offlineBanner(true); return; }
       renderHomeError();
     });
   }
 
+  // Watch routes by what the episode has: in-app video opens the player,
+  // an external link opens it synchronously in the click handler (an
+  // awaited window.open is what browsers pop-up-block), neither just marks
+  // the episode watched.
   function watchEpisode(ep, done) {
+    if (ep.media_url) { location.hash = '#/watch/' + ep.id; return; }
+    if (ep.watch_url) window.open(ep.watch_url, '_blank', 'noopener');
     api('episodes/' + ep.id + '/watched', { method: 'PUT' }).then(function () {
-      if (ep.watch_url) window.open(ep.watch_url, '_blank', 'noopener');
       done();
     }).catch(function () {
       // A guest is asked for an account by the bridge; nothing to do here.
@@ -276,9 +466,9 @@
     var state = $('drama-state');
     state.hidden = false;
     state.innerHTML =
-      '<div class="state-error"><div class="text-body font-semibold">This drama could not be loaded</div>' +
-      '<p class="text-small" style="color:rgb(var(--muted))">Nothing you marked was lost. Check your connection and try again.</p>' +
-      '<button id="retry-drama" class="btn-secondary">Retry</button></div>';
+      '<div class="state-error"><div class="text-body font-semibold">' + esc(i18n.t('drama_error_title')) + '</div>' +
+      '<p class="text-small" style="color:rgb(var(--muted))">' + esc(i18n.t('state_error_body')) + '</p>' +
+      '<button id="retry-drama" class="btn-secondary">' + esc(i18n.t('retry')) + '</button></div>';
     $('retry-drama').addEventListener('click', function () { loadDrama(currentDramaId); });
   }
 
@@ -288,16 +478,16 @@
     var pct = total ? Math.round((watched / total) * 100) : 0;
     $('season-bar').style.width = pct + '%';
     $('season-progress').textContent = total
-      ? watched + ' of ' + total + ' watched this season'
+      ? i18n.t('watched_progress', { watched: watched, total: total })
       : '';
     return watched < total ? eps.filter(function (e) { return !e.viewer_watched; })[0] : null;
   }
 
   function epMeta(e) {
     var parts = [];
-    if (e.minutes) parts.push(e.minutes + ' min');
+    if (e.minutes) parts.push(i18n.t('n_min', { n: e.minutes }));
     var by = watchedBy(e.watched_by, viewerName);
-    if (by) parts.push('watched by ' + by);
+    if (by) parts.push(i18n.t('watched_by_short', { names: by }));
     return parts.join(', ');
   }
 
@@ -306,16 +496,16 @@
     var scr = '<div class="scr' + (isNext ? ' next' : '') + '">' + e.number + '</div>';
     var action;
     if (isNext) {
-      action = '<button class="btn-primary" data-watch="' + e.id + '">' + svg('M7 5l12 7-12 7z') + 'Watch</button>';
+      action = '<button class="btn-primary" data-watch="' + e.id + '">' + svg('M7 5l12 7-12 7z') + esc(i18n.t('watch')) + '</button>';
     } else if (e.viewer_watched) {
-      action = '<button class="check" data-watch="' + e.id + '" data-on="1" aria-label="Watched">' +
+      action = '<button class="check" data-watch="' + e.id + '" data-on="1" aria-pressed="true" aria-label="' + esc(i18n.t('watched')) + '">' +
         '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg></button>';
     } else {
-      action = '<button class="check off" data-watch="' + e.id + '" aria-label="Mark watched">' +
+      action = '<button class="check off" data-watch="' + e.id + '" aria-pressed="false" aria-label="' + esc(i18n.t('mark_watched')) + '">' +
         '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg></button>';
     }
     var meta = epMeta(e);
-    return '<li class="list-row"><button class="icon-btn" style="width:auto;height:auto;padding:0;border:0;background:none" data-open-episode="' + e.id + '" aria-label="Episode details">' + scr + '</button>' +
+    return '<li class="list-row"><button class="icon-btn" style="width:auto;height:auto;padding:0;border:0;background:none" data-open-episode="' + e.id + '" aria-label="' + esc(i18n.t('episode_details')) + '">' + scr + '</button>' +
       '<button class="grow" style="text-align:left;border:0;background:none;font:inherit;color:inherit;padding:0;min-height:44px" data-open-episode="' + e.id + '">' +
       '<div style="font-weight:' + (isNext ? '600' : '500') + '">' + esc(e.title) + '</div>' +
       (meta ? '<div class="sm muted">' + esc(meta) + '</div>' : '') +
@@ -330,11 +520,13 @@
 
     $('drama-poster').style.background = posterColor(data.drama.id);
     $('drama-title').textContent = data.drama.title;
+    document.title = i18n.t('title_drama', { title: data.drama.title });
     var desc = (data.drama.synopsis ? data.drama.synopsis + ' ' : '') +
-      'Added by ' + data.drama.added_by_username;
+      i18n.t('added_by', { name: data.drama.added_by_username });
     $('drama-desc').textContent = desc;
     var folBtn = $('drama-follow');
-    folBtn.textContent = data.following ? 'Following' : 'Follow';
+    folBtn.textContent = data.following ? i18n.t('following') : i18n.t('follow');
+    folBtn.setAttribute('aria-pressed', data.following ? 'true' : 'false');
     folBtn.className = data.following ? 'fol' : 'btn-secondary';
     $('remove-drama-btn').hidden = !data.drama.mine;
 
@@ -349,10 +541,12 @@
 
     $('drama-follow').onclick = function () {
       var on = currentDrama.following;
-      api('dramas/' + currentDrama.drama.id + '/follow', { method: on ? 'DELETE' : 'PUT' })
+      queuedApi('dramas/' + currentDrama.drama.id + '/follow', { method: on ? 'DELETE' : 'PUT' })
         .then(function (r) {
+          if (r.queued) { folBtn.setAttribute('aria-pressed', on ? 'false' : 'true'); return; }
           currentDrama.following = r.following;
-          folBtn.textContent = r.following ? 'Following' : 'Follow';
+          folBtn.textContent = r.following ? i18n.t('following') : i18n.t('follow');
+          folBtn.setAttribute('aria-pressed', r.following ? 'true' : 'false');
           folBtn.className = r.following ? 'fol' : 'btn-secondary';
         })
         .catch(function (err) {
@@ -363,7 +557,7 @@
       openReport({ drama_id: currentDrama.drama.id, name: currentDrama.drama.title });
     };
     $('remove-drama-btn').onclick = function () {
-      if (!window.confirm('Remove ' + currentDrama.drama.title + ' and its episodes?')) return;
+      if (!window.confirm(i18n.t('remove_drama_confirm', { title: currentDrama.drama.title }))) return;
       api('dramas/' + currentDrama.drama.id, { method: 'DELETE' }).then(function () {
         location.hash = '#/';
       }).catch(function () {});
@@ -375,7 +569,7 @@
     var seg = $('season-seg');
     seg.innerHTML = data.seasons.length
       ? data.seasons.map(function (s) {
-          return '<button data-season="' + s + '"' + (s === currentSeason ? ' class="on"' : '') + '>Season ' + s + '</button>';
+          return '<button data-season="' + s + '"' + (s === currentSeason ? ' class="on" aria-current="true"' : '') + '>' + esc(i18n.t('season_n', { n: s })) + '</button>';
         }).join('')
       : '';
     Array.prototype.forEach.call(seg.querySelectorAll('[data-season]'), function (b) {
@@ -391,8 +585,8 @@
     var list = $('ep-list');
     var eps = data.episodes.filter(function (e) { return e.season === currentSeason; });
     if (!eps.length) {
-      list.innerHTML = '<li class="state-empty" style="list-style:none"><div class="text-body font-semibold">No episodes yet</div>' +
-        '<p class="text-small" style="color:rgb(var(--muted))">Add the first episode of this season.</p></li>';
+      list.innerHTML = '<li class="state-empty" style="list-style:none"><div class="text-body font-semibold">' + esc(i18n.t('no_episodes_yet')) + '</div>' +
+        '<p class="text-small" style="color:rgb(var(--muted))">' + esc(i18n.t('no_episodes_body')) + '</p></li>';
       $('add-episode-btn').classList.remove('btn-secondary');
       $('add-episode-btn').classList.add('btn-primary');
       $('season-bar').style.width = '0%';
@@ -402,13 +596,18 @@
     $('add-episode-btn').classList.add('btn-secondary');
     $('add-episode-btn').classList.remove('btn-primary');
     var nextEp = seasonProgressHtml(eps);
-    list.innerHTML = eps.map(function (e) { return epRowHtml(e, nextEp); }).join('');
+    // A very long season is rendered in chunks rather than all at once; a
+    // virtualization library is not worth it at this app's scale (the
+    // schema caps a season at 999 episodes).
+    var slice = eps.length > 200 ? eps.slice(0, 200) : eps;
+    list.innerHTML = slice.map(function (e) { return epRowHtml(e, nextEp); }).join('');
     Array.prototype.forEach.call(list.querySelectorAll('[data-watch]'), function (b) {
       b.addEventListener('click', function () {
         var ep = eps.filter(function (e) { return String(e.id) === b.getAttribute('data-watch'); })[0];
         var on = b.getAttribute('data-on') === '1';
-        api('episodes/' + ep.id + '/watched', { method: on ? 'DELETE' : 'PUT' })
-          .then(loadDramaAgain)
+        if (ep.media_url) { location.hash = '#/watch/' + ep.id; return; }
+        queuedApi('episodes/' + ep.id + '/watched', { method: on ? 'DELETE' : 'PUT' })
+          .then(function (r) { if (!r.queued) loadDramaAgain(); })
           .catch(function (err) {
             if (err.status !== 401) loadDramaAgain();
           });
@@ -432,11 +631,17 @@
     var token = ++dramaLoad;
     currentSeason = null;
     renderDramaSkeleton();
-    api('dramas/' + id).then(function (data) {
+    var dramaP = api('dramas/' + id);
+    Promise.all([mePromise, dramaP]).then(function (results) {
+      var data = results[1];
       if (token !== dramaLoad) return;
+      writeJSON(cacheKey('drama:' + id), data);
+      offlineBanner(false);
       renderDrama(data);
-    }).catch(function () {
+    }).catch(function (err) {
       if (token !== dramaLoad) return;
+      var cached = readJSON(cacheKey('drama:' + id), null);
+      if (cached) { renderDrama(cached); offlineBanner(true); return; }
       renderDramaError();
     });
   }
@@ -448,7 +653,6 @@
     $('drama-desc-input').value = '';
     $('add-drama-error').hidden = true;
     showSheet('sheet-add-drama');
-    $('drama-title-input').focus();
   }
   $('add-drama-btn').addEventListener('click', openAddDrama);
   $('save-drama').addEventListener('click', function () {
@@ -478,9 +682,10 @@
     $('ep-title-input').value = '';
     $('ep-minutes-input').value = '';
     $('ep-url-input').value = '';
+    $('ep-media-input').value = '';
+    $('ep-subtitle-input').value = '';
     $('add-episode-error').hidden = true;
     showSheet('sheet-add-episode');
-    $('ep-title-input').focus();
   }
   $('save-episode').addEventListener('click', function () {
     api('dramas/' + currentDramaId + '/episodes', { method: 'POST', body: {
@@ -489,6 +694,8 @@
       title: $('ep-title-input').value,
       minutes: $('ep-minutes-input').value || null,
       watch_url: $('ep-url-input').value || null,
+      media_url: $('ep-media-input').value || null,
+      subtitle_url: $('ep-subtitle-input').value || null,
     }}).then(function () {
       hideSheet();
       loadDramaAgain();
@@ -501,22 +708,22 @@
   });
 
   function openEpisodeDetails(ep) {
-    $('episode-detail-title').textContent = 'Season ' + ep.season + ', Episode ' + ep.number + ': ' + ep.title;
+    $('episode-detail-title').textContent = i18n.t('episode_full', { s: ep.season, n: ep.number, title: ep.title });
     $('episode-detail-meta').textContent =
-      (ep.minutes ? ep.minutes + ' min, ' : '') + 'added by ' + ep.added_by_username;
+      (ep.minutes ? i18n.t('n_min', { n: ep.minutes }) + ', ' : '') + i18n.t('ep_added_by', { name: ep.added_by_username });
     var by = watchedBy(ep.watched_by, viewerName);
-    $('episode-detail-watchers').textContent = by ? 'Watched by ' + by : 'Not watched yet';
+    $('episode-detail-watchers').textContent = by ? i18n.t('watched_by', { names: by }) : i18n.t('not_watched_yet');
     var link = $('episode-detail-link');
     if (ep.watch_url) {
       link.href = ep.watch_url;
-      link.textContent = ep.watch_url;
+      link.textContent = i18n.t('open_the_link');
       link.hidden = false;
     } else {
       link.hidden = true;
     }
     $('remove-episode-btn').hidden = !ep.mine;
     $('remove-episode-btn').onclick = function () {
-      if (!window.confirm('Remove this episode?')) return;
+      if (!window.confirm(i18n.t('remove_episode'))) return;
       hideSheet();
       api('episodes/' + ep.id, { method: 'DELETE' }).then(loadDramaAgain).catch(function () {});
     };
@@ -527,7 +734,7 @@
   }
 
   function openReport(target) {
-    $('report-context').textContent = 'Report ' + target.name + ' to the group' + "'s admins. Nothing is hidden automatically.";
+    $('report-context').textContent = i18n.t('report_context', { name: target.name });
     $('report-reason').value = '';
     $('report-error').hidden = true;
     $('send-report').onclick = function () {
@@ -547,42 +754,215 @@
     showSheet('sheet-report');
   }
 
+  // ── Language sheet ──────────────────────────────────────────────────────
+
+  function openLanguage() {
+    var locales = i18n.locales();
+    var current = i18n.locale();
+    var wrap = $('language-list');
+    wrap.innerHTML = locales.map(function (l) {
+      var on = l.code === current;
+      return '<div class="lang-row"' + (on ? ' aria-current="true"' : '') + ' data-lang="' + l.code + '" role="button" tabindex="0">' +
+        '<span>' + esc(l.name) + '</span>' + (on ? '<span class="lang-on" aria-label="' + esc(l.name) + '">✓</span>' : '') +
+        '</div>';
+    }).join('');
+    Array.prototype.forEach.call(wrap.querySelectorAll('[data-lang]'), function (row) {
+      function pick() {
+        var code = row.getAttribute('data-lang');
+        hideSheet();
+        if (code === i18n.locale()) return;
+        i18n.setLang(code);
+        track('language_changed', { to: code });
+        route(); // re-render the current view in the chosen language
+      }
+      row.addEventListener('click', pick);
+      row.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+    });
+    showSheet('sheet-language');
+  }
+  $('language-btn').addEventListener('click', openLanguage);
+  $('downloads-btn').addEventListener('click', function () {
+    location.hash = '#/downloads';
+  });
+
   // ── Routing ─────────────────────────────────────────────────────────────
+  // Two entry styles agree: the platform-facing path routes
+  // (/drama/:id, /watch/:id, /downloads) and the in-app hash routes
+  // (#/drama/:id, #/watch/:id, #/downloads). A hash navigation wins over
+  // the entry path and resets the path to /, so the two never disagree.
+
+  function showHome() {
+    $('view-home').hidden = false;
+    $('view-drama').hidden = true;
+    $('view-watch').hidden = true;
+    $('view-downloads').hidden = true;
+    document.title = i18n.t('title_home');
+    hideSheet();
+    track('screen_view', { screen: 'home' });
+    loadHome();
+  }
+  function showDrama(id) {
+    $('view-home').hidden = true;
+    $('view-drama').hidden = false;
+    $('view-watch').hidden = true;
+    $('view-downloads').hidden = true;
+    hideSheet();
+    track('screen_view', { screen: 'drama', drama_id: Number(id) });
+    loadDrama(id);
+  }
+  function showWatch(id) {
+    $('view-home').hidden = true;
+    $('view-drama').hidden = true;
+    $('view-watch').hidden = false;
+    $('view-downloads').hidden = true;
+    hideSheet();
+    track('screen_view', { screen: 'watch', episode_id: Number(id) });
+    loadWatch(id);
+  }
+  function showDownloads() {
+    $('view-home').hidden = true;
+    $('view-drama').hidden = true;
+    $('view-watch').hidden = true;
+    $('view-downloads').hidden = false;
+    document.title = i18n.t('title_downloads');
+    hideSheet();
+    track('screen_view', { screen: 'downloads' });
+    loadDownloads();
+  }
+
+  function loadWatch(id) {
+    // Lazily loaded: the player's module and, only when an episode actually
+    // streams HLS, hls.js under it. The first load never fetches either.
+    ensureScript('watch.js').then(function () {
+      window.HCWatch.show(id);
+    }).catch(function () {
+      renderWatchShellError(id);
+    });
+  }
+  function loadDownloads() {
+    ensureScript('downloads.js').then(function () {
+      window.HCDownloads.show();
+    }).catch(function () {
+      $('dl-state').hidden = false;
+      $('dl-body').hidden = true;
+      $('dl-state').innerHTML = '<div class="state-error"><div class="text-body font-semibold">' + esc(i18n.t('feed_error_title')) + '</div></div>';
+    });
+  }
+
+  function ensureScript(src) {
+    if (!ensureScript.cache) ensureScript.cache = {};
+    if (ensureScript.cache[src]) return ensureScript.cache[src];
+    ensureScript.cache[src] = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = '/' + src;
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+    return ensureScript.cache[src];
+  }
+  window.HC.ensureScript = ensureScript;
+
+  function renderWatchShellError(id) {
+    $('watch-state').hidden = false;
+    $('watch-body').hidden = true;
+    $('watch-state').innerHTML =
+      '<div class="state-error"><div class="text-body font-semibold">' + esc(i18n.t('watch_error_title')) + '</div>' +
+      '<p class="text-small" style="color:rgb(var(--muted))">' + esc(i18n.t('state_error_body')) + '</p>' +
+      '<button id="retry-watch" class="btn-secondary">' + esc(i18n.t('retry')) + '</button></div>';
+    $('retry-watch').addEventListener('click', function () { showWatch(id); });
+  }
+
+  function resolveRoute() {
+    var hash = location.hash || '#/';
+    var m;
+    if ((m = hash.match(/^#\/watch\/(\d+)$/))) {
+      history.replaceState(null, '', '/');
+      return ['watch', m[1]];
+    }
+    if ((m = hash.match(/^#\/drama\/(\d+)$/))) {
+      history.replaceState(null, '', '/');
+      return ['drama', m[1]];
+    }
+    if (hash === '#/downloads') {
+      history.replaceState(null, '', '/');
+      return ['downloads'];
+    }
+    if ((m = location.pathname.match(/^\/watch\/(\d+)$/))) return ['watch', m[1]];
+    if ((m = location.pathname.match(/^\/drama\/(\d+)$/))) return ['drama', m[1]];
+    if (location.pathname === '/downloads') return ['downloads'];
+    return ['home'];
+  }
 
   function route() {
-    var hash = location.hash || '#/';
-    var drama = hash.match(/^#\/drama\/(\d+)$/);
-    if (drama) {
-      $('view-home').hidden = true;
-      $('view-drama').hidden = false;
-      hideSheet();
-      loadDrama(drama[1]);
-    } else {
-      $('view-drama').hidden = true;
-      $('view-home').hidden = false;
-      hideSheet();
-      currentSeason = null;
-      loadHome();
-    }
+    var r = resolveRoute();
+    if (r[0] === 'watch') showWatch(r[1]);
+    else if (r[0] === 'drama') showDrama(r[1]);
+    else if (r[0] === 'downloads') showDownloads();
+    else showHome();
   }
   window.addEventListener('hashchange', route);
   $('back-btn').addEventListener('click', function () {
     if (history.length > 1) history.back();
     else location.hash = '#/';
   });
+  $('watch-back').addEventListener('click', function () {
+    var d = window.HCWatch ? window.HCWatch.dramaId() : null;
+    location.hash = d ? '#/drama/' + d : '#/';
+  });
+  $('dl-back').addEventListener('click', function () {
+    location.hash = '#/';
+  });
 
   // ── Boot ────────────────────────────────────────────────────────────────
 
-  // The skeleton shows while /api/me is still pending too, not only while
-  // the feed request is: route() (which calls loadHome) waits for it.
-  if (!/^#\/drama\/\d+$/.test(location.hash || '#/')) renderHomeSkeleton();
-
-  api('me').then(function (me) {
+  // Identity and the feed load in parallel. When /api/me cannot be reached
+  // (an offline launch has no ?token=), the remembered account answers from
+  // hc-me and the cached data renders — nothing is wiped.
+  var mePromise = api('me').then(function (me) {
     viewerName = me.user ? me.user.username : null;
+    viewerId = me.user ? me.user.id : null;
     isGuest = !!me.guest;
+    if (viewerId) writeJSON(meCacheKey(), { id: viewerId, username: viewerName, guest: false });
     if (!me.user) $('add-drama-btn').disabled = true;
-    route();
+    return me;
   }).catch(function () {
-    route();
+    var me = readJSON(meCacheKey(), null);
+    if (me) { viewerName = me.username; viewerId = me.id; isGuest = false; }
+    return { user: me ? { id: me.id, username: me.username } : null, guest: false };
   });
+
+  // VIP is fetched once per boot; the downloads and watch views read it.
+  api('subscription').then(function (s) {
+    viewerVip = !!s.vip;
+  }).catch(function () {});
+
+  i18n.init();
+  i18n.onChange(function () {
+    offlineBanner($('offline-banner') && !$('offline-banner').hidden);
+  });
+
+  // The offline shell. Registration can fail in a third-party iframe that
+  // refuses storage; that is a normal degradation, not an error to surface.
+  if ('serviceWorker' in navigator) {
+    try {
+      navigator.serviceWorker.register('/sw.js').catch(function () {});
+    } catch (e) {}
+  }
+  // Installability at the app's own address: remember the prompt event so
+  // the browser's own install offer works, and record when it is accepted.
+  var installEvent = null;
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    installEvent = e;
+  });
+  window.addEventListener('appinstalled', function () {
+    track('install_prompt_accepted');
+  });
+
+  if (!/^#\/(drama|watch)\/\d+$/.test(location.hash || '#/') && !/^\/(drama|watch)\/\d+$/.test(location.pathname) && location.pathname !== '/downloads' && (location.hash || '#/') !== '#/downloads') {
+    renderHomeSkeleton();
+  }
+  route();
+  replayQueue();
 })();

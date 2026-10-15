@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Terms of Service · HomeClip</title>
+  <meta name="description" content="The terms that apply when you use HomeClip.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='8' y='14' width='84' height='60' rx='10' fill='%23181512'/><rect x='16' y='22' width='68' height='44' rx='6' fill='%23fbbf24'/><rect x='40' y='80' width='20' height='8' rx='3' fill='%23181512'/></svg>">
+  <link rel="stylesheet" href="/tailwind.css">
+  <link rel="stylesheet" href="/screens.css">
+  <script src="/usernode-bridge/v1/bridge.js"></script>
+  <script>
+    (function () {
+      var media = window.matchMedia('(prefers-color-scheme: dark)');
+      function applyTheme() {
+        var theme = (window.usernode && window.usernode.theme) || (media.matches ? 'dark' : 'light');
+        document.documentElement.classList.toggle('dark', theme === 'dark');
+        document.documentElement.style.colorScheme = theme;
+      }
+      applyTheme();
+      window.addEventListener('usernode:theme-changed', applyTheme);
+      media.addEventListener('change', applyTheme);
+    })();
+  </script>
+  <style>
+    .legal {max-width:640px;margin:0 auto;padding:24px 20px 48px}
+    .legal h1 {font-size:28px;line-height:34px;font-weight:700;margin:8px 0 4px}
+    .legal h2 {font-size:20px;line-height:28px;font-weight:600;margin:24px 0 8px}
+    .legal p, .legal li {font-size:16px;line-height:24px;color:rgb(var(--fg))}
+    .legal ul {list-style:disc;padding-inline-start:24px;margin:8px 0}
+    .legal .upd {font-size:14px;color:rgb(var(--muted))}
+    .legal a {color:rgb(var(--accent))}
+  </style>
+</head>
+<body class="min-h-screen bg-ground text-fg" style="font-family:ui-rounded,system-ui,sans-serif">
+  <main class="legal">
+    <p><a href="/">Back to HomeClip</a></p>
+    <h1>Terms of Service</h1>
+    <p class="upd">Last updated: October 2026</p>
+    <p>Welcome to HomeClip, a place for a homeroom to follow the serial dramas it watches together. These terms apply when you use the app.</p>
+
+    <h2>Using the app</h2>
+    <p>HomeClip is a shared catalogue, not a video host. The group adds the dramas and episodes it watches, follows the shows it likes, and marks episodes watched. HomeClip plays no video of its own: an episode can carry a link, which Watch opens in a new tab, and an episode's owner can attach a video link that plays inside the app.</p>
+
+    <h2>Your account</h2>
+    <p>You sign in with your Homeroom account. Do not use the app to break the law or anyone's rights, and do not add content you have no right to share.</p>
+
+    <h2>What you add</h2>
+    <p>Dramas, episodes, links, subtitles links and reports you add stay in the app's own database. You are responsible for what you add. Only the person who added a drama or an episode can remove it; reports are recorded for the group's admins and nothing is hidden automatically.</p>
+
+    <h2>Downloads</h2>
+    <p>Saving an episode for offline watching stores it in your own browser on your own device, only if the episode's video source allows it. Nothing is stored on HomeClip's servers, and downloads are not shared with anyone else.</p>
+
+    <h2>Disclaimers</h2>
+    <p>HomeClip is provided as is, with no promise that it will always be available or error free. Video plays or links out to third-party sources the group has added; HomeClip does not control those sources and is not responsible for them.</p>
+
+    <h2>Changes</h2>
+    <p>These terms may change as the app grows; this page will say when they were last updated.</p>
+
+    <h2>Contact</h2>
+    <p>Questions about these terms: <a href="mailto:[contact email]">[contact email]</a>.</p>
+  </main>
+</body>
+</html>
