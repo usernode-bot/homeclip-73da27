@@ -3,6 +3,7 @@
 
 import { api } from '../api.js';
 import { el, dramaCard, hRow, skeletonHome, errorState } from '../ui.js';
+import { artImg, backdropArt, lqipArt } from '../art.js';
 import { t, genreLabel, GENRES } from '../i18n.js';
 import { navigate } from '../router.js';
 
@@ -28,11 +29,16 @@ function buildBanner(featured, container) {
   const banner = el(
     '<a class="hc-banner mb-6 block" data-nav href="/drama/' + featured[0].id + '" aria-label="' + featured[0].title.replace(/"/g, '&quot;') + '">' +
       '<div class="absolute inset-0">' +
-        featured.map((d, i) =>
-          '<img src="/banner/' + d.id + '.svg" alt="" loading="lazy" decoding="async" ' +
-          'class="absolute inset-0 h-full w-full object-cover ' +
-          (i === 0 ? 'opacity-100' : 'opacity-0') + ' motion-safe:transition-opacity motion-safe:duration-500" data-slide="' + i + '">'
-        ).join('') +
+        featured.map((d, i) => {
+          const src = backdropArt(d.id) || '/banner/' + d.id + '.svg';
+          const fb = backdropArt(d.id) ? '/banner/' + d.id + '.svg' : '';
+          const lqip = lqipArt(d.id, 'b');
+          return '<img src="' + src + '" alt="" loading="lazy" decoding="async" data-art' +
+            (fb ? ' data-fallback="' + fb + '"' : '') +
+            (lqip ? ' style="background-image:url(' + lqip + ');background-size:cover;background-position:center"' : '') +
+            ' class="absolute inset-0 h-full w-full object-cover ' +
+            (i === 0 ? 'opacity-100' : 'opacity-0') + ' motion-safe:transition-opacity motion-safe:duration-500" data-slide="' + i + '">';
+        }).join('') +
       '</div>' +
       '<div class="hc-banner-text">' +
         '<p class="text-small text-muted" data-b-meta>' + featured[0].year + ' · ' + featured[0].genres.map(genreLabel).join(', ') + '</p>' +
@@ -100,7 +106,8 @@ function buildSearch(container) {
           for (const d of r.items) {
             const item = el(
               '<button type="button" class="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-raised" role="option">' +
-                '<img class="h-14 w-10 rounded-md object-cover" loading="lazy" src="/poster/' + d.id + '.svg" alt="">' +
+                '<span class="block h-14 w-10 shrink-0 overflow-hidden rounded-md bg-raised" style="aspect-ratio:2/3">' +
+                  artImg(d.id, { cls: 'h-full w-full object-cover', lqip: false }) + '</span>' +
                 '<span class="min-w-0"><span class="block truncate text-small font-medium text-fg">' + d.title + '</span>' +
                 '<span class="block truncate text-small text-muted">' + d.year + ' · ' + d.genres.map(genreLabel).join(', ') + '</span></span>' +
               '</button>'

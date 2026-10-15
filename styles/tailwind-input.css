@@ -167,6 +167,28 @@
       bg-accent text-small font-bold text-on-accent;
   }
 
+  /* A drama detail's wide backdrop (16:9) above the facts, and a
+     watch/episode row's still thumbnail with the episode number on it.
+     Both keep their ratio so the page never shifts while they load. */
+  .hc-backdrop {
+    @apply overflow-hidden rounded-xl border border-line bg-raised;
+    aspect-ratio: 16 / 9;
+  }
+  .hc-backdrop img {
+    @apply h-full w-full object-cover;
+  }
+  .hc-still {
+    @apply block overflow-hidden rounded-md border border-line bg-raised;
+    aspect-ratio: 16 / 9;
+    width: 7rem;
+  }
+  .hc-still img {
+    @apply h-full w-full object-cover;
+  }
+  .hc-still-num {
+    @apply absolute bottom-1 left-1 rounded bg-black/70 px-1.5 py-0.5 text-small font-medium text-white;
+  }
+
   /* The auto-sliding featured banner. */
   .hc-banner {
     @apply relative overflow-hidden rounded-2xl border border-line bg-raised;
