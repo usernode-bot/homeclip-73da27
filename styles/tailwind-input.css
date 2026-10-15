@@ -98,6 +98,7 @@
     @apply rounded-xl border border-line bg-surface p-4;
   }
 
+  /* The label above a section: sentence case, never uppercase or tracked. */
   .section-label {
     @apply mb-2 px-1 text-small font-medium text-muted;
   }
@@ -132,6 +133,18 @@
   .chip[aria-pressed="true"],
   .chip.is-active {
     @apply border-transparent bg-accent text-on-accent;
+  }
+
+  /* Access chips (drama tracker): the VIP badge (accent, with the lock icon)
+     and the neutral chip for "Free with ads" and statuses. They sit on the
+     .chip base above/below and the tracker's screens.css. */
+  .chip-vip,
+  .chip.chip-vip {
+    @apply bg-accent text-on-accent;
+  }
+  .chip-soft,
+  .chip.chip-soft {
+    @apply bg-raised text-muted;
   }
 
   /* Horizontal poster row (Trending, New Episodes, ...). */

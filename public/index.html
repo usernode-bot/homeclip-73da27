@@ -18,7 +18,6 @@
         if (v === null) return 'null';
         if (typeof v === 'string') return v;
         if (typeof v === 'number' || typeof v === 'boolean') return String(v);
-        if (typeof v === 'function') return '[Function ' + (v.name || 'anonymous') + ']';
         if (v instanceof Error) return (v.stack || (v.name + ': ' + v.message));
         if (depth > 3) return '[…]';
         var seen = new WeakSet();
@@ -28,6 +27,7 @@
             seen.add(val);
           }
           if (typeof val === 'function') return '[Function ' + (v.name || 'anonymous') + ']';
+          if (val instanceof Error) return val.stack || (v.name + ': ' + v.message);
           return val;
         });
       } catch (e) { try { return String(v); } catch (_) { return '[unserializable]'; } }

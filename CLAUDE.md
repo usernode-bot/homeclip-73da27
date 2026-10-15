@@ -141,12 +141,16 @@ stay outlined and quiet. The signature element is the TV: next-to-watch and
 upcoming episodes are drawn as TV screens, and progress is always one thin
 amber bar. Posters there are flat colour tiles.
 
+The tracker also sells VIP: its access chip (`chip-vip` with a lock icon,
+on the `accent` token) marks VIP episodes and a quiet `chip-soft` marks
+"Free with ads".
+
 The kit is in `styles/tailwind-input.css`: colour tokens with a light and
 a dark value (named in `tailwind.config.js`), and a few components
 (`page-column`, `btn-primary`, `btn-secondary`, `field`, `list`, `list-row`,
-`card`, `section-label`, `skeleton`, `state-empty`, `state-error`).
-Re-theme by changing the token values there, keeping every text pair at
-4.5:1 or more in both looks.
+`card`, `chip`, `chip-vip`, `chip-soft`, `section-label`, `skeleton`,
+`state-empty`, `state-error`). Re-theme by changing the token values there,
+keeping every text pair at 4.5:1 or more in both looks.
 
 - Colour comes only from the tokens (`bg-ground`, `bg-surface`,
   `text-fg`, `text-muted`, `border-line`, `bg-accent` with
@@ -198,3 +202,25 @@ Re-theme by changing the token values there, keeping every text pair at
 - **Tracker vocabulary:** drama, season, episode, Follow, Following, Watch,
   watched, Next to watch, Continue this season, Drama feed, Add drama, Add
   episode, Report, Remove. One idea, one word, everywhere.
+- **Tracker VIP and payments** (all under `/api/tracker/*` except the
+  webhook). Tables `subscriptions`, `payments` (both `staging:private`),
+  `coupons`, plus `comments`, `comment_likes` and `reviews` (private) keep
+  their own names; they reference the `tracker_*` tables. Staging seeds
+  fake subscriptions, payments and the `STAGE10` coupon for the shots'
+  fixture accounts, and demo episodes carry mixed access levels.
+- **Money is integer rupiah, never floats** (IDR is zero-decimal in
+  Stripe), shown as "Rp 59.000" with dot separators, formatted by hand.
+- **VIP is decided on the server only.** `vipStatus()` reads
+  `subscriptions` against `req.now`; `gateEpisode()` strips a locked
+  episode's `watch_url`, and marking a VIP episode watched answers 403
+  `vip_required`. The client cannot unlock anything. Decision code reads
+  `req.now`, never `new Date()`.
+- **Payments add no runtime dependency:** Stripe goes over `fetch` against
+  its REST API and webhook signatures are verified with node `crypto`
+  (adapters in `providers/`; midtrans/xendit are 501 stubs). The webhook
+  `/api/webhooks/stripe` is the one public API path; Stripe returns the
+  browser to `/tracker/vip/return` (no hash), which the tracker page's
+  router handles alongside the hash routes.
+- **Comments, likes and reviews** on the tracker are moderated with
+  `moderation.js` (profanity and spam checks).
+- **Tracker vocabulary** also includes VIP, Free, Free with ads.
