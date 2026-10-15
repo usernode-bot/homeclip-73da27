@@ -54,6 +54,7 @@ const ICON_PATHS = {
   star: '<path d="M12 3.5l2.6 5.3 5.9.9-4.2 4.1 1 5.8-5.3-2.8-5.3 2.8 1-5.8-4.2-4.1 5.9-.9z"/>',
   trash: '<path d="M5 7h14"/><path d="M9 7V4h6v3"/><path d="M7 7l1 13h8l1-13"/>',
   chevronLeft: '<path d="M14.5 5.5L8 12l6.5 6.5"/>',
+  chevronRight: '<path d="M9.5 5.5L16 12l-6.5 6.5"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   check: '<path d="M5 13l4.5 4.5L19 7"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 010 18a15 15 0 010-18z"/>',
@@ -128,12 +129,22 @@ export function dramaCard(d, opts) {
   return clone;
 }
 
-// A titled horizontal row of cards.
+// A titled horizontal row of cards, with round scroll arrows at its edges
+// (they scrollBy the same native scroll container; touch swiping still
+// works, and a row that fits without overflow hides its arrows).
 export function hRow(title, cards) {
   const row = el(
     '<section class="hc-row-section mb-5">' +
       '<h2 class="section-label">' + title + '</h2>' +
-      '<div class="hc-row" role="list"></div>' +
+      '<div class="hc-carousel">' +
+        '<button type="button" class="hc-carousel-btn hc-carousel-btn-prev" tabindex="-1">' +
+          icon('chevronLeft', 'h-5 w-5') +
+        '</button>' +
+        '<div class="hc-row" role="list"></div>' +
+        '<button type="button" class="hc-carousel-btn hc-carousel-btn-next" tabindex="-1">' +
+          icon('chevronRight', 'h-5 w-5') +
+        '</button>' +
+      '</div>' +
     '</section>'
   );
   const listEl = row.querySelector('.hc-row');
@@ -141,7 +152,43 @@ export function hRow(title, cards) {
     c.setAttribute('role', 'listitem');
     listEl.appendChild(c);
   }
+  wireCarouselNav(row.querySelector('.hc-carousel'), listEl);
   return row;
+}
+
+// Carousel arrow behaviour: each click steps ~2–4 visible cards (computed
+// from the card width + gap, clamped), the disabled state follows the
+// scroll position, and manual scrolling, swipes and resizes keep it in
+// sync. Detached rows carry their listeners away with them, like every
+// other node this module builds.
+function wireCarouselNav(carousel, listEl) {
+  const prev = carousel.querySelector('.hc-carousel-btn-prev');
+  const next = carousel.querySelector('.hc-carousel-btn-next');
+  // The arrows are decorative affordances over an already-navigable
+  // container: drop them from the tab order (keyboard users reach the
+  // cards and their links directly).
+  prev.setAttribute('aria-label', t('common.scrollPrev'));
+  next.setAttribute('aria-label', t('common.scrollNext'));
+
+  const step = () => {
+    const first = listEl.firstElementChild;
+    const cardW = first ? first.getBoundingClientRect().width : 112;
+    const gap = 12; // gap-3
+    const visible = Math.floor((listEl.clientWidth + gap) / (cardW + gap));
+    return (cardW + gap) * Math.max(2, Math.min(4, visible));
+  };
+  const update = () => {
+    const max = listEl.scrollWidth - listEl.clientWidth;
+    prev.disabled = listEl.scrollLeft <= 2;
+    next.disabled = listEl.scrollLeft >= max - 2;
+  };
+
+  prev.addEventListener('click', () => listEl.scrollBy({ left: -step(), behavior: 'smooth' }));
+  next.addEventListener('click', () => listEl.scrollBy({ left: step(), behavior: 'smooth' }));
+  listEl.addEventListener('scroll', update, { passive: true });
+  // Fires when the row is inserted into the document and on every resize,
+  // so the disabled states start correct without a resize listener.
+  new ResizeObserver(update).observe(listEl);
 }
 
 // ── Skeletons (the content's own shape) ──────────────────────────────────

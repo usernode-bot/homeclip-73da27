@@ -18,6 +18,8 @@ const STRINGS = {
     'common.remove': 'Remove',
     'common.saved': 'Settings saved',
     'common.cancel': 'Cancel',
+    'common.scrollPrev': 'Scroll left',
+    'common.scrollNext': 'Scroll right',
 
     'time.min': 'min',
 
@@ -239,6 +241,8 @@ const STRINGS = {
     'common.remove': 'Hapus',
     'common.saved': 'Pengaturan disimpan',
     'common.cancel': 'Batal',
+    'common.scrollPrev': 'Gulir ke kiri',
+    'common.scrollNext': 'Gulir ke kanan',
 
     'time.min': 'mnt',
 
