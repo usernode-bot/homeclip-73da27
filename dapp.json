@@ -64,6 +64,28 @@
       "name": "Profile and settings",
       "path": "/profile",
       "expectText": "Language"
+    },
+    {
+      "name": "Tracker feed empty state",
+      "path": "/tracker",
+      "expectText": "No dramas yet"
+    },
+    {
+      "id": "tracker-feed",
+      "name": "Tracker populated demo",
+      "path": "/tracker?demo=1",
+      "expectText": "The Tide Table",
+      "visual": true,
+      "impact": ["public/tracker.html", "public/app.js", "public/screens.css", "styles/**"]
+    },
+    {
+      "name": "Tracker drama page",
+      "path": "/tracker?demo=1#/drama/900001",
+      "expectText": "Season 2"
     }
-  ]
+  ],
+  "visibility": {
+    "build": "public",
+    "view": "public"
+  }
 }

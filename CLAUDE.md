@@ -123,6 +123,24 @@ or licensed video is used (see `data/catalog.js`).
   theme setting on Profile wins over it when set). Every new screen
   gets both a light and a dark value per token.
 
+### Drama tracker (also on this app)
+
+The app also carries a smaller feature from main: a shared drama tracker at
+`/tracker`. The group adds serial dramas season by season and episode by
+episode; each person follows the shows they like, marks episodes watched and
+sees which episode comes next. It plays no video itself: an episode can carry
+a link to wherever it is watched, which Watch opens in a new tab. It is
+separate from the streaming catalog above: its own tables (`tracker_*`), API
+(`/api/tracker/*`), page (`public/tracker.html`, `public/app.js`,
+`public/screens.css`) and hash routing.
+
+Its design: the main screen's one job is to start the next episode, so its
+one filled button is Watch, in warm amber (the `action` token with
+`on-action`, and `action-soft` for the "New episode" tint); Follow buttons
+stay outlined and quiet. The signature element is the TV: next-to-watch and
+upcoming episodes are drawn as TV screens, and progress is always one thin
+amber bar. Posters there are flat colour tiles.
+
 The kit is in `styles/tailwind-input.css`: colour tokens with a light and
 a dark value (named in `tailwind.config.js`), and a few components
 (`page-column`, `btn-primary`, `btn-secondary`, `field`, `list`, `list-row`,
@@ -170,3 +188,13 @@ Re-theme by changing the token values there, keeping every text pair at
 - **Progress saving is throttled** (every 5 s while playing, plus on
   pause, pagehide and view unmount) and only stored for signed-in
   viewers; guests can browse and watch but never write.
+- **Drama tracker data:** `tracker_follows`, `tracker_watches` and
+  `tracker_reports` are marked `staging:private` (each person's own data).
+  `tracker_dramas` and `tracker_episodes` are public: the group's shared
+  feed. The five tracker demo dramas and their episodes are seeded on boot in
+  staging with fixed ids and `is_demo = true`; every `/api/tracker/*` response
+  without `?demo=1` leaves `is_demo` rows out. The viewing account's own
+  follows and watches are written once, on its first `?demo=1` request.
+- **Tracker vocabulary:** drama, season, episode, Follow, Following, Watch,
+  watched, Next to watch, Continue this season, Drama feed, Add drama, Add
+  episode, Report, Remove. One idea, one word, everywhere.

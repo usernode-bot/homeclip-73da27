@@ -48,3 +48,17 @@ with precompiled Tailwind (`npm run build` compiles
   screen adds the viewer demo rows (My List entries and half-watched
   episodes marked `is_demo`) so populated screens can be reviewed. The
   plain routes stay the production shape without `?demo=1`.
+
+## Drama tracker
+
+A smaller, separate feature lives at `/tracker`: the group adds the serial
+dramas it watches, season by season and episode by episode. Each person
+follows the shows they like, marks episodes watched and sees which episode
+comes next ("Next to watch"). Anyone in the group can add a drama and
+episodes (season, number, title, optional length and link); the person who
+added something can remove it, and a drama or episode can be reported to the
+group's admins. The tracker plays no video: Watch marks an episode watched
+and opens its link, if it has one, in a new tab. It uses its own `tracker_*`
+tables and `/api/tracker/*` routes. The staging preview opened with
+`/tracker?demo=1` shows five made-up dramas with their episodes, follows and
+watches.

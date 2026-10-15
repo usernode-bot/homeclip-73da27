@@ -55,6 +55,14 @@ module.exports = {
         danger: token('danger'),
         'on-danger': token('on-danger'),
         focus: token('focus'), // the keyboard focus ring
+        action: token('action'), // the action colour: Watch, progress
+        'on-action': token('on-action'), // text on the action colour
+        'action-soft': token('action-soft'), // the "New episode" tint
+      },
+      fontFamily: {
+        // The system's rounded face, which feels friendly like a
+        // living-room screen (the spec's Design subsection).
+        sans: ['ui-rounded', 'system-ui', 'sans-serif'],
       },
       // The type scale: four sizes, and nothing in between.
       fontSize: {
