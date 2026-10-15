@@ -40,7 +40,7 @@ async function createCheckout({ plan, amountIdr, origin, userId, paymentId }) {
     'line_items[0][price_data][unit_amount]': String(amountIdr),
     'line_items[0][price_data][recurring][interval]': plan.interval.unit,
     'line_items[0][price_data][product_data][name]': `HomeClip VIP - ${plan.name}`,
-    success_url: `${origin}/vip/return?session_id={CHECKOUT_SESSION_ID}`,
+    success_url: `${origin}/tracker/vip/return?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${origin}/vip`,
     'metadata[payment_id]': String(paymentId),
     'metadata[user_id]': String(userId),

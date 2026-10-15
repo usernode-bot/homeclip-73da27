@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
+const { DRAMAS, episodesFor, VIDEO_BASE, VIDEO_POOL } = require('./data/catalog');
 const { isProfane, isSpam, loose } = require('./moderation');
 
 const app = express();
@@ -23,13 +24,9 @@ const APP_AUDIENCE = process.env.USERNODE_APP_ID
   : null;
 
 // Visitors with no Homeroom account ("guests") may look around this app at
-// its own address, read-only (every public app). The platform marks
-// them with a token of their own: ES256, signed by a key of its own (its
-// public half is USERNODE_GUEST_JWT_PUBLIC_KEY), this audience, `pur:
-// 'guest'`, `guest: true`, and no id or username. Such a visitor is
-// `req.guest`, never `req.user`, and every write they try is answered 401
-// `account_required`, which the bridge turns into "Make an account to
-// continue".
+// its own address, read-only (every public app). See the platform
+// conventions: every write they try is answered 401 `account_required`,
+// which the bridge turns into "Make an account to continue".
 const GUEST_AUDIENCE = APP_AUDIENCE ? APP_AUDIENCE + ':guest' : null;
 const GUEST_PUBLIC_KEY = (process.env.USERNODE_GUEST_JWT_PUBLIC_KEY || '')
   .replace(/\\n/g, '\n');
@@ -55,24 +52,8 @@ app.use(express.json({
 // The platform's three centrally hosted files — the bridge, the native UI
 // kit and the Tailwind runtime — are reachable at these paths on this app's
 // OWN origin, so index.html can load them with a RELATIVE path and never
-// name the platform's hostname. A hostname baked into an app is what breaks
-// every app at once when the platform's domain moves.
-//
-// In production and on a staging preview the platform's edge answers these
-// before the request ever reaches this process (a per-app Ingress rule on
-// Kubernetes, the wildcard site's matcher on the docker runtime). This
-// handler is what makes the same relative paths work under a plain
-// `node server.js`, where there is no edge in front of the app at all.
-//
-// Registered BEFORE the auth middleware because these three files are
-// public: the platform serves them anonymously from any app origin, and a
-// login redirect arriving where a <script> was expected is exactly the
-// failure a relative path is meant to avoid.
-// The platform's origin, at RUNTIME, and ONLY from the variable the platform
-// injects. No hostname is written into this file: a baked-in one is what left
-// the whole fleet pointing at a domain the platform had moved away from.
-// Unset only outside the platform (a plain local `node server.js`) — set
-// USERNODE_PLATFORM_ORIGIN there too if you want the hosted assets locally.
+// name the platform's hostname. Registered BEFORE the auth middleware
+// because these three files are public.
 const PLATFORM_ORIGIN = (process.env.USERNODE_PLATFORM_ORIGIN || '')
   .replace(/\/+$/, '');
 
@@ -83,8 +64,6 @@ app.get(/^\/usernode-(?:bridge|native|tailwind)\//, async (req, res) => {
     if (!upstream.ok) return res.sendStatus(upstream.status);
     const type = upstream.headers.get('content-type');
     if (type) res.type(type);
-    // max-age=0 with revalidation, never a long TTL: the whole point of
-    // central hosting is that a platform-side fix lands on the next load.
     res.set('Cache-Control', 'public, max-age=0, must-revalidate');
     return res.send(Buffer.from(await upstream.arrayBuffer()));
   } catch (err) {
@@ -111,15 +90,13 @@ function requestNow(req) {
 }
 
 // Verify platform-issued JWT if one was passed, then enforce auth on
-// anything not explicitly marked public. The iframe adds `?token=…`
-// on load; the frontend script forwards the token via `x-usernode-token`
-// on subsequent fetches.
+// anything not explicitly marked public.
 app.use((req, res, next) => {
   req.now = requestNow(req);
   const token = req.query.token || req.headers['x-usernode-token'];
   if (token && JWT_PUBLIC_KEY && APP_AUDIENCE) {
     try {
-      // Pin the algorithm, issuer and audience. Without `algorithms` a
+      // Pin the algorithm, issuer and audience: without `algorithms` a
       // caller could hand us an HS256 token signed with the public PEM
       // (which every app knows) and forge any user.
       const claims = jwt.verify(token, JWT_PUBLIC_KEY, {
@@ -127,8 +104,6 @@ app.use((req, res, next) => {
         issuer: 'usernode',
         audience: APP_AUDIENCE,
       });
-      // `pur` names what the token is for. Only user-identity tokens
-      // authenticate a person here.
       if (claims && claims.pur === 'iframe') req.user = claims;
     } catch {}
   }
@@ -143,11 +118,9 @@ app.use((req, res, next) => {
     } catch {}
   }
 
-  // Static assets (CSS/JS/images) are always served; the API and the HTML
-  // shell are gated so direct hits to the staging/prod subdomain don't
-  // leak app data to the public internet. A guest may READ: every GET,
-  // `/api/*` included, so read routes must not assume req.user (use
-  // `req.user ? req.user.id : null`). Every write needs an account.
+  // A guest may READ (every GET, `/api/*` included), so read routes must not
+  // assume req.user (use `req.user ? req.user.id : null`). Every write needs
+  // an account.
   if (req.method !== 'GET' || req.path.startsWith('/api/')) {
     if (PUBLIC_API_PATHS.has(req.path)) return next();
     if (!req.user && req.guest) {
@@ -161,12 +134,520 @@ app.use((req, res, next) => {
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
-// The template ships no favicon file; index.html carries an inline SVG
-// icon instead. Answer 204 here so anything that still probes
-// /favicon.ico (older browsers, direct visits) doesn't fall through to
-// the auth-gated catch-all and surface a 401 in the console on every
-// fresh load.
 app.get('/favicon.ico', (_req, res) => res.status(204).end());
+
+// ── Legacy table rename (idempotent, applied before the schema) ───────────
+// Before the streaming catalog, the tracker's tables were named dramas /
+// episodes / follows / watches / reports. The catalog now owns the names
+// dramas and episodes, so on a database created before the rename the
+// tracker's tables are moved to their new names first. A rename keeps the
+// group's real tracker data (added dramas, follows, watches, reports) and
+// frees the names for the catalog's fresh tables; foreign keys follow a
+// rename, so comments, reviews, playback and tracker_reports keep pointing
+// at the right tables. Each rename runs only when the old table still
+// exists and the new one does not, and the old table is genuinely the
+// tracker's: the catalog later re-creates dramas and episodes under the old
+// names, so each of those pairs carries a signature column only the
+// catalog's table has (popularity on dramas, num on episodes). A table with
+// its signature is the catalog's, and the rename already ran.
+const LEGACY_TRACKER_TABLES = [
+  ['dramas', 'tracker_dramas', 'popularity'],
+  ['episodes', 'tracker_episodes', 'num'],
+  ['follows', 'tracker_follows', null],
+  ['watches', 'tracker_watches', null],
+  ['reports', 'tracker_reports', null],
+];
+
+async function tableExists(name) {
+  const r = await pool.query('SELECT to_regclass($1) IS NOT NULL AS yes', ['public.' + name]);
+  return r.rows[0].yes;
+}
+
+async function tableHasColumn(table, column) {
+  const r = await pool.query(
+    `SELECT 1 FROM information_schema.columns
+     WHERE table_name = $1 AND column_name = $2`, [table, column]);
+  return r.rowCount > 0;
+}
+
+async function migrateLegacyTrackerTables() {
+  for (const [oldName, newName, catalogColumn] of LEGACY_TRACKER_TABLES) {
+    if (!await tableExists(oldName)) continue;
+    if (catalogColumn && await tableHasColumn(oldName, catalogColumn)) {
+      // The catalog's own table, not a legacy one: the rename already ran.
+      continue;
+    }
+    if (await tableExists(newName)) {
+      console.error(`[boot] legacy table ${oldName} and ${newName} both exist; ` +
+        `leaving ${oldName} untouched`);
+      continue;
+    }
+    await pool.query(`ALTER TABLE ${oldName} RENAME TO ${newName}`);
+    console.log(`[boot] migrated legacy tracker table ${oldName} -> ${newName}`);
+  }
+}
+
+// ── Database schema (idempotent, applied on boot) ─────────────────────────
+// dramas/episodes are the shared SAMPLE CATALOG: public (it is the app's own
+// content, visible to everyone in the app anyway). my_list / watch_progress
+// / settings hold per-user data, so they are `staging:private` — schema-only
+// copies in staging, seeded per user by ?demo=1 below.
+const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS dramas (
+  id INTEGER PRIMARY KEY,
+  title TEXT NOT NULL,
+  year INTEGER NOT NULL,
+  country TEXT NOT NULL,
+  genres TEXT[] NOT NULL DEFAULT '{}',
+  rating REAL NOT NULL,
+  popularity INTEGER NOT NULL,
+  featured INTEGER,
+  cast_names TEXT[] NOT NULL DEFAULT '{}',
+  synopsis_en TEXT NOT NULL,
+  synopsis_id TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS episodes (
+  drama_id INTEGER NOT NULL REFERENCES dramas(id) ON DELETE CASCADE,
+  num INTEGER NOT NULL,
+  duration_min INTEGER NOT NULL,
+  video_url TEXT NOT NULL,
+  PRIMARY KEY (drama_id, num)
+);
+CREATE TABLE IF NOT EXISTS my_list (
+  user_id INTEGER NOT NULL,
+  drama_id INTEGER NOT NULL REFERENCES dramas(id) ON DELETE CASCADE,
+  added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  is_demo BOOLEAN NOT NULL DEFAULT false,
+  PRIMARY KEY (user_id, drama_id)
+);
+CREATE TABLE IF NOT EXISTS watch_progress (
+  user_id INTEGER NOT NULL,
+  drama_id INTEGER NOT NULL REFERENCES dramas(id) ON DELETE CASCADE,
+  ep INTEGER NOT NULL,
+  seconds REAL NOT NULL DEFAULT 0,
+  duration REAL NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  is_demo BOOLEAN NOT NULL DEFAULT false,
+  PRIMARY KEY (user_id, drama_id)
+);
+CREATE TABLE IF NOT EXISTS settings (
+  user_id INTEGER PRIMARY KEY,
+  language TEXT NOT NULL DEFAULT 'system',
+  theme TEXT NOT NULL DEFAULT 'system',
+  notifications BOOLEAN NOT NULL DEFAULT true
+);
+COMMENT ON TABLE my_list IS 'staging:private';
+COMMENT ON TABLE watch_progress IS 'staging:private';
+COMMENT ON TABLE settings IS 'staging:private';
+`;
+
+// Seed the sample catalog (idempotent; the same content in staging and
+// production — it is the app's Phase 1 mock data, not fake visitor data).
+async function seedCatalog() {
+  const client = await pool.connect();
+  try {
+    for (const d of DRAMAS) {
+      await client.query(
+        `INSERT INTO dramas (id, title, year, country, genres, rating, popularity, featured, cast_names, synopsis_en, synopsis_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT (id) DO NOTHING`,
+        [d.id, d.title, d.year, d.country, d.genres, d.rating, d.popularity,
+         d.featured, d.cast, d.synopsis_en, d.synopsis_id]
+      );
+      for (const ep of episodesFor(d)) {
+        await client.query(
+          `INSERT INTO episodes (drama_id, num, duration_min, video_url)
+           VALUES ($1,$2,$3,$4)
+           ON CONFLICT (drama_id, num) DO UPDATE
+             SET duration_min = EXCLUDED.duration_min, video_url = EXCLUDED.video_url`,
+          [d.id, ep.num, ep.durationMin, ep.videoUrl]
+        );
+      }
+    }
+  } finally {
+    client.release();
+  }
+}
+
+// ── Demo fixture (first version's populated demo, behind ?demo=1) ─────────
+// Writes the VIEWING account a few My List entries and half-watched episodes
+// ONCE, marked is_demo, so Home's "Continue Watching" and the My List /
+// History pages show a populated screen. Rows marked is_demo are excluded
+// from every response that does NOT carry ?demo=1, so the plain route stays
+// the production shape (an empty list until the user acts).
+const DEMO_MY_LIST_IDS = [1, 4, 12];
+const DEMO_PROGRESS = [
+  { dramaId: 2, ep: 3, pct: 0.42 },
+  { dramaId: 7, ep: 1, pct: 0.15 },
+  { dramaId: 13, ep: 5, pct: 0.7 },
+  { dramaId: 23, ep: 2, pct: 0.55 },
+];
+async function seedViewerDemo(userId) {
+  for (const id of DEMO_MY_LIST_IDS) {
+    await pool.query(
+      `INSERT INTO my_list (user_id, drama_id, is_demo) VALUES ($1,$2,true)
+       ON CONFLICT (user_id, drama_id) DO NOTHING`,
+      [userId, id]
+    );
+  }
+  for (const p of DEMO_PROGRESS) {
+    const eps = await pool.query(
+      'SELECT duration_min FROM episodes WHERE drama_id=$1 AND num=$2',
+      [p.dramaId, p.ep]
+    );
+    if (eps.rowCount === 0) continue;
+    // The stored duration is the REAL sample-video length is unknown here;
+    // store display minutes as seconds and let the player overwrite it with
+    // the true duration the first time it plays.
+    const dur = eps.rows[0].duration_min * 60;
+    await pool.query(
+      `INSERT INTO watch_progress (user_id, drama_id, ep, seconds, duration, is_demo)
+       VALUES ($1,$2,$3,$4,$5,true)
+       ON CONFLICT (user_id, drama_id) DO NOTHING`,
+      [userId, p.dramaId, p.ep, Math.round(dur * p.pct), dur]
+    );
+  }
+}
+
+// ?demo=1 requests (staging only) get the viewer's demo rows too; plain
+// requests never see them.
+function wantsDemo(req) {
+  return IS_STAGING && req.query.demo === '1';
+}
+
+const DRAMA_FIELDS = 'd.id, d.title, d.year, d.country, d.genres, d.rating, d.popularity, d.cast_names, d.synopsis_en, d.synopsis_id';
+
+// ── API ───────────────────────────────────────────────────────────────────
+
+app.get('/api/me', async (req, res) => {
+  let settings = { language: 'system', theme: 'system', notifications: true };
+  if (req.user) {
+    const r = await pool.query('SELECT language, theme, notifications FROM settings WHERE user_id = $1', [req.user.id]);
+    if (r.rowCount > 0) settings = r.rows[0];
+  }
+  res.json({
+    user: req.user ? { id: req.user.id, username: req.user.username, locale: req.user.locale || null } : null,
+    guest: !!req.guest,
+    settings,
+    platformLocale: req.user ? (req.user.locale || null) : null,
+  });
+});
+
+app.put('/api/settings', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'account_required' });
+  const { language, theme, notifications } = req.body || {};
+  const lang = ['system', 'en', 'id'].includes(language) ? language : 'system';
+  const themeOk = ['system', 'light', 'dark'].includes(theme) ? theme : 'system';
+  const notif = !!notifications;
+  await pool.query(
+    `INSERT INTO settings (user_id, language, theme, notifications) VALUES ($1,$2,$3,$4)
+     ON CONFLICT (user_id) DO UPDATE SET language=$2, theme=$3, notifications=$4`,
+    [req.user.id, lang, themeOk, notif]
+  );
+  res.json({ ok: true, settings: { language: lang, theme: themeOk, notifications: notif } });
+});
+
+// Everything the Home screen needs, in one round trip.
+app.get('/api/home', async (req, res) => {
+  const demo = wantsDemo(req);
+  if (demo && req.user) {
+    const has = await pool.query(
+      'SELECT 1 FROM watch_progress WHERE user_id=$1 UNION ALL SELECT 1 FROM my_list WHERE user_id=$1 LIMIT 1',
+      [req.user.id]
+    );
+    if (has.rowCount === 0) await seedViewerDemo(req.user.id);
+  }
+  const [featured, trending, newEpisodes, top10, cont] = await Promise.all([
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE featured IS NOT NULL ORDER BY featured LIMIT 5`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d ORDER BY popularity DESC LIMIT 12`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d ORDER BY year DESC, id DESC LIMIT 12`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d ORDER BY rating DESC, popularity DESC LIMIT 10`),
+    req.user
+      ? pool.query(
+          `SELECT ${DRAMA_FIELDS}, w.ep, w.seconds, w.duration, w.updated_at
+           FROM watch_progress w JOIN dramas d ON d.id = w.drama_id
+           WHERE w.user_id = $1 ${demo ? '' : 'AND w.is_demo = false'}
+           ORDER BY w.updated_at DESC LIMIT 12`,
+          [req.user.id])
+      : { rows: [] },
+  ]);
+  res.json({
+    featured: featured.rows,
+    trending: trending.rows,
+    newEpisodes: newEpisodes.rows,
+    top10: top10.rows,
+    continue: cont.rows,
+  });
+});
+
+// Browse / search with filters, sort and pagination.
+app.get('/api/dramas', async (req, res) => {
+  const { genre, country, year, sort, q } = req.query;
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(24, Math.max(6, parseInt(req.query.limit, 10) || 15));
+  const where = [];
+  const params = [];
+  if (genre && ['romance', 'thriller', 'fantasy', 'comedy', 'historical', 'action'].includes(genre)) {
+    params.push(genre); where.push(`$${params.length} = ANY(d.genres)`);
+  }
+  if (country && /^[a-z]{2}$/.test(country)) {
+    params.push(country); where.push(`d.country = $${params.length}`);
+  }
+  if (year && /^\d{4}$/.test(year)) {
+    params.push(Number(year)); where.push(`d.year = $${params.length}`);
+  }
+  if (q && typeof q === 'string' && q.trim()) {
+    params.push('%' + q.trim() + '%'); where.push(`d.title ILIKE $${params.length}`);
+  }
+  const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+  const orderSql = sort === 'newest' ? 'ORDER BY d.year DESC, d.id DESC' : 'ORDER BY d.popularity DESC, d.rating DESC';
+  params.push(limit, (page - 1) * limit);
+  const rows = await pool.query(
+    `SELECT ${DRAMA_FIELDS} FROM dramas d ${whereSql} ${orderSql} LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  );
+  const total = await pool.query(`SELECT count(*)::int AS n FROM dramas d ${whereSql}`, params.slice(0, params.length - 2));
+  res.json({
+    items: rows.rows,
+    total: total.rows[0].n,
+    hasMore: (page - 1) * limit + rows.rows.length < total.rows[0].n,
+    page,
+  });
+});
+
+app.get('/api/dramas/:id', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'not_found' });
+  const d = await pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.id = $1`, [id]);
+  if (d.rowCount === 0) return res.status(404).json({ error: 'not_found' });
+  const eps = await pool.query(
+    'SELECT num, duration_min, video_url FROM episodes WHERE drama_id = $1 ORDER BY num', [id]
+  );
+  let inMyList = false;
+  let progress = null;
+  if (req.user) {
+    const ml = await pool.query('SELECT 1 FROM my_list WHERE user_id=$1 AND drama_id=$2', [req.user.id, id]);
+    inMyList = ml.rowCount > 0;
+    const pr = await pool.query(
+      'SELECT ep, seconds, duration FROM watch_progress WHERE user_id=$1 AND drama_id=$2 AND is_demo=false',
+      [req.user.id, id]
+    );
+    if (pr.rowCount > 0) progress = pr.rows[0];
+  }
+  res.json({ drama: d.rows[0], episodes: eps.rows, inMyList, progress });
+});
+
+app.get('/api/my-list', async (req, res) => {
+  const demo = wantsDemo(req);
+  if (demo && req.user) {
+    const has = await pool.query('SELECT 1 FROM my_list WHERE user_id=$1 UNION ALL SELECT 1 FROM watch_progress WHERE user_id=$1 LIMIT 1', [req.user.id]);
+    if (has.rowCount === 0) await seedViewerDemo(req.user.id);
+  }
+  const r = await pool.query(
+    `SELECT ${DRAMA_FIELDS}, m.added_at
+     FROM my_list m JOIN dramas d ON d.id = m.drama_id
+     WHERE m.user_id = $1 ${demo ? '' : 'AND m.is_demo = false'}
+     ORDER BY m.added_at DESC`,
+    [req.user ? req.user.id : 0]
+  );
+  res.json({ items: r.rows });
+});
+
+app.post('/api/my-list/:id', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'account_required' });
+  const id = parseInt(req.params.id, 10);
+  await pool.query(
+    `INSERT INTO my_list (user_id, drama_id, is_demo) VALUES ($1,$2,false)
+     ON CONFLICT (user_id, drama_id) DO UPDATE SET is_demo = false`,
+    [req.user.id, id]
+  );
+  res.json({ ok: true });
+});
+
+app.delete('/api/my-list/:id', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'account_required' });
+  await pool.query('DELETE FROM my_list WHERE user_id=$1 AND drama_id=$2', [req.user.id, parseInt(req.params.id, 10)]);
+  res.json({ ok: true });
+});
+
+app.get('/api/history', async (req, res) => {
+  const demo = wantsDemo(req);
+  if (demo && req.user) {
+    const has = await pool.query('SELECT 1 FROM my_list WHERE user_id=$1 UNION ALL SELECT 1 FROM watch_progress WHERE user_id=$1 LIMIT 1', [req.user.id]);
+    if (has.rowCount === 0) await seedViewerDemo(req.user.id);
+  }
+  const r = await pool.query(
+    `SELECT ${DRAMA_FIELDS}, w.ep, w.seconds, w.duration, w.updated_at
+     FROM watch_progress w JOIN dramas d ON d.id = w.drama_id
+     WHERE w.user_id = $1 ${demo ? '' : 'AND w.is_demo = false'}
+     ORDER BY w.updated_at DESC LIMIT 50`,
+    [req.user ? req.user.id : 0]
+  );
+  res.json({ items: r.rows });
+});
+
+app.delete('/api/history/:id', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'account_required' });
+  await pool.query('DELETE FROM watch_progress WHERE user_id=$1 AND drama_id=$2', [req.user.id, parseInt(req.params.id, 10)]);
+  res.json({ ok: true });
+});
+
+app.post('/api/progress', async (req, res) => {
+  if (!req.user) return res.status(401).json({ error: 'account_required' });
+  const { dramaId, ep, seconds, duration } = req.body || {};
+  if (!Number.isInteger(dramaId) || !Number.isInteger(ep) ||
+      typeof seconds !== 'number' || typeof duration !== 'number' ||
+      seconds < 0 || duration <= 0) {
+    return res.status(400).json({ error: 'bad_request' });
+  }
+  await pool.query(
+    `INSERT INTO watch_progress (user_id, drama_id, ep, seconds, duration, is_demo)
+     VALUES ($1,$2,$3,$4,$5,false)
+     ON CONFLICT (user_id, drama_id) DO UPDATE
+       SET ep = $3, seconds = $4, duration = $5, updated_at = now(), is_demo = false`,
+    [req.user.id, dramaId, ep, Math.min(seconds, duration), duration]
+  );
+  res.json({ ok: true });
+});
+
+app.get('/api/facets', async (_req, res) => {
+  const r = await pool.query(
+    `SELECT DISTINCT country FROM dramas ORDER BY country`
+  );
+  const y = await pool.query(`SELECT DISTINCT year FROM dramas ORDER BY year DESC`);
+  res.json({ countries: r.rows.map(x => x.country), years: y.rows.map(x => x.year) });
+});
+
+// Placeholder poster art: a deterministic, original SVG generated from the
+// drama itself (genre-hued gradient, a quiet pattern, the title). No
+// copyrighted artwork anywhere. Served OUTSIDE /api/ on purpose: <img> tags
+// cannot attach the auth header, and generated poster art is not sensitive.
+const GENRE_HUES = { romance: 335, thriller: 255, fantasy: 200, comedy: 28, historical: 165, action: 280 };
+
+function escapeXml(s) {
+  return s.replace(/[<>&'"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[c]));
+}
+
+function wrapTitle(title, max) {
+  const words = title.split(/\s+/);
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    const next = line ? line + ' ' + w : w;
+    if (next.length > max && line) { lines.push(line); line = w; } else { line = next; }
+  }
+  if (line) lines.push(line);
+  return lines.slice(0, 4);
+}
+
+app.get('/poster/:id.svg', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const r = await pool.query('SELECT id, title, year, country, genres FROM dramas WHERE id = $1', [id]);
+  if (r.rowCount === 0) return res.status(404).json({ error: 'not_found' });
+  const d = r.rows[0];
+  const hue = (GENRE_HUES[d.genres[0]] || 240) + (id % 7) * 4;
+  const h2 = hue + 30;
+  const c1 = `hsl(${hue}, 52%, 26%)`;
+  const c2 = `hsl(${h2}, 60%, 10%)`;
+  const lines = wrapTitle(d.title, 13);
+  const lineH = 46;
+  const start = 236 - ((lines.length - 1) * lineH) / 2;
+  const text = lines.map((l, i) =>
+    `<text x="150" y="${start + i * lineH}" text-anchor="middle" font-family="'Trebuchet MS','Segoe UI',sans-serif" font-size="40" font-weight="700" fill="#ffffff" opacity="0.96">${escapeXml(l)}</text>`
+  ).join('');
+  // A quiet deterministic pattern: three translucent discs seeded by id.
+  const o = (n) => 40 + ((id * 13 + n * 7) % 240);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450">
+<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs>
+<rect width="300" height="450" fill="url(#g)"/>
+<circle cx="${o(1) % 300}" cy="${o(2) % 450}" r="90" fill="#ffffff" opacity="0.05"/>
+<circle cx="${o(3) % 300}" cy="${o(4) % 450}" r="140" fill="#000000" opacity="0.08"/>
+<circle cx="${o(5) % 300}" cy="${o(6) % 450}" r="55" fill="#ffffff" opacity="0.04"/>
+<rect x="0" y="0" width="300" height="450" fill="none" stroke="#ffffff" stroke-opacity="0.14" stroke-width="2"/>
+<g><rect x="128" y="96" width="44" height="44" rx="12" fill="#ffffff" opacity="0.18"/>
+<path d="M 143 107 L 163 118 L 143 129 Z" fill="#ffffff" opacity="0.9"/></g>
+${text}
+<text x="150" y="410" text-anchor="middle" font-family="'Trebuchet MS','Segoe UI',sans-serif" font-size="20" fill="#ffffff" opacity="0.75">${escapeXml(d.year + ' · ' + d.country.toUpperCase())}</text>
+</svg>`;
+  res.type('image/svg+xml');
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.send(svg);
+});
+
+// Wide featured-banner art for the Home screen: same deterministic style as
+// the posters but composed for 16:9, and with no baked-in title (the HTML
+// overlay carries the title so it can slide between episodes' dramas).
+app.get('/banner/:id.svg', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const r = await pool.query('SELECT id, title, year, country, genres FROM dramas WHERE id = $1', [id]);
+  if (r.rowCount === 0) return res.status(404).json({ error: 'not_found' });
+  const d = r.rows[0];
+  const hue = (GENRE_HUES[d.genres[0]] || 240) + (id % 7) * 4;
+  const h2 = hue + 40;
+  const c1 = `hsl(${hue}, 55%, 30%)`;
+  const c2 = `hsl(${h2}, 62%, 12%)`;
+  const o = (n) => 40 + ((id * 13 + n * 7) % 240);
+  // A quiet fan of translucent "clip" wedges, seeded by id, so each banner
+  // reads as its own artwork while staying obviously generated.
+  const wedge = (k) => {
+    const x = 200 + ((id * 97 + k * 260) % 900);
+    const w = 120 + ((id * 31 + k * 53) % 160);
+    return `<rect x="${x}" y="-60" width="${w}" height="800" fill="#ffffff" opacity="0.045" transform="rotate(14 ${x} 340)"/>`;
+  };
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675">
+<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient>
+<radialGradient id="s" cx="0.22" cy="0.28" r="0.9"><stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient></defs>
+<rect width="1200" height="675" fill="url(#g)"/>
+${wedge(1)}${wedge(2)}${wedge(3)}${wedge(4)}
+<circle cx="${o(1) % 1200}" cy="${o(2) % 675}" r="190" fill="#ffffff" opacity="0.05"/>
+<circle cx="${o(3) % 1200}" cy="${o(4) % 675}" r="300" fill="#000000" opacity="0.09"/>
+<rect width="1200" height="675" fill="url(#s)"/>
+<g><rect x="70" y="250" width="88" height="88" rx="22" fill="#ffffff" opacity="0.2"/>
+<path d="M 100 272 L 132 294 L 100 316 Z" fill="#ffffff" opacity="0.92"/></g>
+</svg>`;
+  res.type('image/svg+xml');
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.send(svg);
+});
+
+// Sample subtitle files for the player's subtitle language selector. The
+// sample videos carry no real captions, so these are generic sample lines,
+// clearly marked as such. Served outside /api/ like the posters: <track>
+// elements cannot attach the auth header, and the files are generic samples.
+function sampleVtt(lang) {
+  const isId = lang === 'id';
+  const lines = isId
+    ? ['[Contoh takarir HomeClip]', 'Video contoh ini tidak memiliki dialog asli.', 'Selamat menonton.']
+    : ['[HomeClip sample subtitles]', 'This sample video has no real dialogue.', 'Enjoy the show.'];
+  let cues = 'WEBVTT\n';
+  let t = 1;
+  for (const line of lines) {
+    const a = `00:00:0${t}.000`;
+    const b = `00:00:0${t + 2}.000`;
+    cues += `\n${t}\n${a} --> ${b}\n${line}\n`;
+    t += 3;
+  }
+  return cues;
+}
+
+app.get('/subtitles/:lang.vtt', (req, res) => {
+  const lang = req.params.lang;
+  if (!['en', 'id'].includes(lang)) return res.status(404).json({ error: 'not_found' });
+  res.type('text/vtt');
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.send(sampleVtt(lang));
+});
+
+app.use(express.static(path.join(__dirname, 'public')));
+
+
+// ── Shared drama tracker (main's HomeClip) ────────────────────────────────
+// The group's shared drama feed: add dramas season by season, follow them,
+// mark episodes watched, see what is next. It lives beside the streaming
+// catalog above, under its own `tracker_*` tables, its own /api/tracker/*
+// routes and its own page at /tracker, so the two never share a name.
+const tracker = express.Router();
+app.use('/api/tracker', tracker);
 
 /* ── HomeClip: dramas, episodes and VIP access ────────────────────────────
  *
@@ -311,7 +792,7 @@ function gateEpisode(e, vip) {
 
 /* ── Plans, subscription management, payment history ────────────────────── */
 
-app.get('/api/plans', (_req, res) => {
+tracker.get('/plans', (_req, res) => {
   res.json({
     provider: currentProvider().id,
     paymentConfigured: paymentConfigured(),
@@ -322,11 +803,11 @@ app.get('/api/plans', (_req, res) => {
   });
 });
 
-app.get('/api/me/subscription', h(async (req, res) => {
+tracker.get('/me/subscription', h(async (req, res) => {
   res.json(subscriptionPayload(await vipStatus(req)));
 }));
 
-app.post('/api/subscription/cancel', h(async (req, res) => {
+tracker.post('/subscription/cancel', h(async (req, res) => {
   const s = await vipStatus(req);
   if (!s.row || !s.vip) return res.status(409).json({ error: 'not_active' });
   // Cancelling keeps VIP until the renewal date already paid for.
@@ -338,7 +819,7 @@ app.post('/api/subscription/cancel', h(async (req, res) => {
   res.json(subscriptionPayload(await vipStatus(req)));
 }));
 
-app.post('/api/subscription/resume', h(async (req, res) => {
+tracker.post('/subscription/resume', h(async (req, res) => {
   const s = await vipStatus(req);
   if (!s.row || s.row.status !== 'canceled' || !s.vip) {
     return res.status(409).json({ error: 'not_canceled' });
@@ -351,7 +832,7 @@ app.post('/api/subscription/resume', h(async (req, res) => {
   res.json(subscriptionPayload(await vipStatus(req)));
 }));
 
-app.get('/api/payments', h(async (req, res) => {
+tracker.get('/payments', h(async (req, res) => {
   if (!req.user) return res.json({ payments: [] });
   const { rows } = await pool.query(
     `SELECT id, plan_id, provider, provider_ref, amount_idr, discount_idr,
@@ -371,7 +852,7 @@ app.get('/api/payments', h(async (req, res) => {
   });
 }));
 
-app.post('/api/coupon/validate', h(async (req, res) => {
+tracker.post('/coupon/validate', h(async (req, res) => {
   const plan = PLANS[req.body.planId];
   if (!plan) return res.status(400).json({ error: 'unknown_plan' });
   const r = await couponDiscount(req.body.couponCode, plan, req.now);
@@ -393,7 +874,7 @@ function requestOrigin(req) {
   return `${proto}://${host}`;
 }
 
-app.post('/api/checkout', h(async (req, res) => {
+tracker.post('/checkout', h(async (req, res) => {
   const plan = PLANS[req.body.planId];
   if (!plan) return res.status(400).json({ error: 'unknown_plan' });
   const s = await vipStatus(req);
@@ -465,7 +946,7 @@ async function fulfillCheckout(session, now) {
 // The browser lands here straight from Stripe's hosted page. The redirect
 // alone proves nothing — the server asks Stripe about the session before
 // unlocking anything.
-app.get('/api/checkout/confirm', h(async (req, res) => {
+tracker.get('/checkout/confirm', h(async (req, res) => {
   if (!paymentConfigured()) return res.status(503).json({ error: 'payments_not_configured' });
   const sessionId = String(req.query.session_id || '');
   if (!/^cs_(test|live)_\w+$/.test(sessionId)) {
@@ -545,15 +1026,15 @@ app.post('/api/webhooks/stripe', h(async (req, res) => {
 
 
 // ── HTML entry points with per-request meta ───────────────────────────────
-// The plain shell (/) is served by express.static below, with its default
-// title and description. These three paths serve the SAME shell with the
+// The plain tracker shell (/tracker) is served by the catch-all below, with
+// its default title and description. These paths serve the SAME shell with the
 // meta block (title, description, Open Graph, Twitter card, JSON-LD,
 // canonical) injected per request, so a drama or an episode pasted into a
 // chat or found by a search engine describes itself. Canonical and share
 // URLs are built from the request's own host and forwarded scheme: no
 // hostname is ever written into this file.
-const SHELL_PATH = path.join(__dirname, 'public', 'index.html');
-const SHELL_DEFAULT_TITLE = '<title>HomeClip</title>';
+const SHELL_PATH = path.join(__dirname, 'public', 'tracker.html');
+const SHELL_DEFAULT_TITLE = '<title>HomeClip drama tracker</title>';
 const META_SLOT = '<!--META-->';
 
 let shellHtml = null;
@@ -610,16 +1091,16 @@ async function metaFor(req, kind) {
   const params = [id, demo];
   const rows = await pool.query(
     kind === 'drama'
-      ? `SELECT id, title, synopsis FROM dramas WHERE id = $1 AND ($2 OR NOT is_demo)`
+      ? `SELECT id, title, synopsis FROM tracker_dramas WHERE id = $1 AND ($2 OR NOT is_demo)`
       : `SELECT e.id, e.title, e.season, e.number, d.id AS drama_id, d.title AS drama_title, d.synopsis
-           FROM episodes e JOIN dramas d ON d.id = e.drama_id
+           FROM tracker_episodes e JOIN tracker_dramas d ON d.id = e.drama_id
           WHERE e.id = $1 AND ($2 OR NOT e.is_demo)`,
     params
   );
   return rows.rows[0] || null;
 }
 
-app.get('/drama/:id', async (req, res) => {
+app.get('/tracker/drama/:id', async (req, res) => {
   try {
     const d = await metaFor(req, 'drama');
     if (!d) return res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><title>HomeClip</title><p>Drama not found</p>');
@@ -629,11 +1110,11 @@ app.get('/drama/:id', async (req, res) => {
       name: d.title, description: d.synopsis || undefined,
     });
     return serveShell(req, res, title, d.synopsis || 'Watch ' + d.title + ' with your group on HomeClip',
-      'video.tv_show', jsonLd, '/drama/' + d.id);
+      'video.tv_show', jsonLd, '/tracker/drama/' + d.id);
   } catch (err) { console.error(err); return res.sendStatus(500); }
 });
 
-app.get('/watch/:id', async (req, res) => {
+app.get('/tracker/watch/:id', async (req, res) => {
   try {
     const e = await metaFor(req, 'episode');
     if (!e) return res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><title>HomeClip</title><p>Episode not found</p>');
@@ -645,20 +1126,8 @@ app.get('/watch/:id', async (req, res) => {
       episodeNumber: e.number,
     });
     return serveShell(req, res, title, e.synopsis || ('Watch ' + e.title + ' with your group on HomeClip'),
-      'video.episode', jsonLd, '/watch/' + e.id);
+      'video.episode', jsonLd, '/tracker/watch/' + e.id);
   } catch (err) { console.error(err); return res.sendStatus(500); }
-});
-
-// The Downloads view (hash-routed inside the app; this path entry point
-// serves the same shell).
-app.get('/downloads', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-// The VIP screens as paths too: Stripe's checkout returns the browser to
-// /vip/return (no hash), and the client's router handles it.
-app.get(['/vip', '/vip/manage', '/vip/payments', '/vip/return'], (_req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // The legal pages as clean paths; the files themselves are static under
@@ -681,12 +1150,12 @@ app.get('/robots.txt', (req, res) => {
 app.get('/sitemap.xml', async (req, res) => {
   try {
     const rows = await pool.query(
-      `SELECT id FROM dramas WHERE NOT is_demo ORDER BY id`);
+      `SELECT id FROM tracker_dramas WHERE NOT is_demo ORDER BY id`);
     const origin = requestOrigin(req);
     const body = '<?xml version="1.0" encoding="UTF-8"?>\n' +
       '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
       '<url><loc>' + origin + '/</loc></url>\n' +
-      rows.rows.map(r => '<url><loc>' + origin + '/drama/' + r.id + '</loc></url>').join('\n') +
+      rows.rows.map(r => '<url><loc>' + origin + '/tracker/drama/' + r.id + '</loc></url>').join('\n') +
       '\n</urlset>\n';
     res.type('application/xml').send(body);
   } catch (err) { console.error(err); return res.sendStatus(500); }
@@ -701,13 +1170,6 @@ app.get('/vendor/hls.min.js', (_req, res) => {
   return res.sendFile(p);
 });
 
-app.use(express.static(path.join(__dirname, 'public'), {
-  // Unhashed filenames: revalidate on every load (the etag makes the 304s
-  // cheap), so a deploy lands on the next load instead of up to five
-  // minutes later.
-  maxAge: 0,
-  setHeaders(res) { res.setHeader('Cache-Control', 'no-cache, must-revalidate'); },
-}));
 
 // ── Schema ────────────────────────────────────────────────────────────────
 // Idempotent on boot. `dramas` and `episodes` are public (the group's shared
@@ -715,9 +1177,9 @@ app.use(express.static(path.join(__dirname, 'public'), {
 // marked `staging:private` so staging copies the schema without the rows
 // (the demo seeds its own).
 
-async function ensureSchema() {
+async function ensureTrackerSchema() {
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS dramas (
+    CREATE TABLE IF NOT EXISTS tracker_dramas (
       id BIGSERIAL PRIMARY KEY,
       title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 80),
       synopsis TEXT CHECK (synopsis IS NULL OR length(synopsis) <= 280),
@@ -729,17 +1191,17 @@ async function ensureSchema() {
   // Sample-drama metadata: nullable, so dramas added before this change and
   // dramas added without them keep working. `cast` itself is a reserved SQL
   // word, so the cast column is cast_list.
-  await pool.query(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS year INT`);
-  await pool.query(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS country TEXT`);
-  await pool.query(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS genres TEXT`);
-  await pool.query(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS rating REAL
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS year INT`);
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS country TEXT`);
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS genres TEXT`);
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS rating REAL
     CHECK (rating IS NULL OR (rating BETWEEN 0 AND 10))`);
-  await pool.query(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS cast_list TEXT`);
-  await pool.query(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS poster_url TEXT`);
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS cast_list TEXT`);
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS poster_url TEXT`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS episodes (
+    CREATE TABLE IF NOT EXISTS tracker_episodes (
       id BIGSERIAL PRIMARY KEY,
-      drama_id BIGINT NOT NULL REFERENCES dramas(id) ON DELETE CASCADE,
+      drama_id BIGINT NOT NULL REFERENCES tracker_dramas(id) ON DELETE CASCADE,
       season INT NOT NULL CHECK (season BETWEEN 1 AND 99),
       number INT NOT NULL CHECK (number BETWEEN 1 AND 999),
       title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 80),
@@ -752,42 +1214,42 @@ async function ensureSchema() {
       UNIQUE (drama_id, season, number)
     )`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS follows (
+    CREATE TABLE IF NOT EXISTS tracker_follows (
       user_id BIGINT NOT NULL,
       username TEXT NOT NULL,
-      drama_id BIGINT NOT NULL REFERENCES dramas(id) ON DELETE CASCADE,
+      drama_id BIGINT NOT NULL REFERENCES tracker_dramas(id) ON DELETE CASCADE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (user_id, drama_id)
     )`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS watches (
+    CREATE TABLE IF NOT EXISTS tracker_watches (
       user_id BIGINT NOT NULL,
       username TEXT NOT NULL,
-      episode_id BIGINT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+      episode_id BIGINT NOT NULL REFERENCES tracker_episodes(id) ON DELETE CASCADE,
       watched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (user_id, episode_id)
     )`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS reports (
+    CREATE TABLE IF NOT EXISTS tracker_reports (
       id BIGSERIAL PRIMARY KEY,
       reporter_id BIGINT NOT NULL,
       reporter_username TEXT NOT NULL,
-      drama_id BIGINT REFERENCES dramas(id) ON DELETE SET NULL,
-      episode_id BIGINT REFERENCES episodes(id) ON DELETE SET NULL,
+      drama_id BIGINT REFERENCES tracker_dramas(id) ON DELETE SET NULL,
+      episode_id BIGINT REFERENCES tracker_episodes(id) ON DELETE SET NULL,
       reason TEXT CHECK (reason IS NULL OR length(reason) <= 500),
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
   // Phase 5: where an episode's video lives, and its subtitles. Columns are
   // also added for databases created before they existed; the https check
   // lives in the API layer, which validates every write.
-  await pool.query(`ALTER TABLE episodes ADD COLUMN IF NOT EXISTS media_url TEXT`);
-  await pool.query(`ALTER TABLE episodes ADD COLUMN IF NOT EXISTS subtitle_url TEXT`);
+  await pool.query(`ALTER TABLE tracker_episodes ADD COLUMN IF NOT EXISTS media_url TEXT`);
+  await pool.query(`ALTER TABLE tracker_episodes ADD COLUMN IF NOT EXISTS subtitle_url TEXT`);
 
   // Where the viewer stopped in an episode (the player reports it).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS playback (
       user_id BIGINT NOT NULL,
-      episode_id BIGINT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+      episode_id BIGINT NOT NULL REFERENCES tracker_episodes(id) ON DELETE CASCADE,
       position_s INT NOT NULL DEFAULT 0,
       duration_s INT,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -826,7 +1288,7 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS comments (
       id BIGSERIAL PRIMARY KEY,
-      episode_id BIGINT NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+      episode_id BIGINT NOT NULL REFERENCES tracker_episodes(id) ON DELETE CASCADE,
       user_id BIGINT NOT NULL,
       username TEXT NOT NULL,
       parent_id BIGINT REFERENCES comments(id) ON DELETE CASCADE,
@@ -847,7 +1309,7 @@ async function ensureSchema() {
     )`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS reviews (
-      drama_id BIGINT NOT NULL REFERENCES dramas(id) ON DELETE CASCADE,
+      drama_id BIGINT NOT NULL REFERENCES tracker_dramas(id) ON DELETE CASCADE,
       user_id BIGINT NOT NULL,
       username TEXT NOT NULL,
       rating INT NOT NULL CHECK (rating BETWEEN 1 AND 5),
@@ -859,12 +1321,12 @@ async function ensureSchema() {
   await pool.query(`CREATE INDEX IF NOT EXISTS reviews_drama_idx
     ON reviews (drama_id, created_at DESC)`);
   // A report may now name a comment; nullable, so existing rows keep working.
-  await pool.query(`ALTER TABLE reports ADD COLUMN IF NOT EXISTS
+  await pool.query(`ALTER TABLE tracker_reports ADD COLUMN IF NOT EXISTS
     comment_id BIGINT REFERENCES comments(id) ON DELETE CASCADE`);
   // staging:private copies the schema to staging without the rows.
-  await pool.query(`COMMENT ON TABLE follows IS 'staging:private'`);
-  await pool.query(`COMMENT ON TABLE watches IS 'staging:private'`);
-  await pool.query(`COMMENT ON TABLE reports IS 'staging:private'`);
+  await pool.query(`COMMENT ON TABLE tracker_follows IS 'staging:private'`);
+  await pool.query(`COMMENT ON TABLE tracker_watches IS 'staging:private'`);
+  await pool.query(`COMMENT ON TABLE tracker_reports IS 'staging:private'`);
   await pool.query(`COMMENT ON TABLE playback IS 'staging:private'`);
   await pool.query(`COMMENT ON TABLE events IS 'staging:private'`);
   await pool.query(`COMMENT ON TABLE client_errors IS 'staging:private'`);
@@ -875,7 +1337,7 @@ async function ensureSchema() {
   // VIP: each episode is Free, VIP or Free with ads (decided server-side, see
   // gateEpisode); subscriptions, payments and coupons back the VIP plans.
   await pool.query(`
-    ALTER TABLE episodes ADD COLUMN IF NOT EXISTS access TEXT NOT NULL DEFAULT 'free'
+    ALTER TABLE tracker_episodes ADD COLUMN IF NOT EXISTS access TEXT NOT NULL DEFAULT 'free'
       CHECK (access IN ('free', 'vip', 'ads'))`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS coupons (
@@ -1003,10 +1465,10 @@ const DEMO_FOLLOWS = [
   ['Jun', 900003], ['Jun', 900005],
 ];
 
-async function seedDemo() {
+async function seedTrackerDemo() {
   for (const d of DEMO_DRAMAS) {
     await pool.query(
-      `INSERT INTO dramas (id, title, synopsis, added_by_id, added_by_username, is_demo, created_at)
+      `INSERT INTO tracker_dramas (id, title, synopsis, added_by_id, added_by_username, is_demo, created_at)
        VALUES ($1, $2, $3, $4, $5, true, now() - interval '30 days')
        ON CONFLICT (id) DO NOTHING`,
       [d.id, d.title, d.synopsis, DEMO_USERS[d.by], d.by]
@@ -1018,14 +1480,14 @@ async function seedDemo() {
   for (const [dramaId, season, number, title, minutes] of DEMO_EPISODES) {
     const by = dramaId === 900002 ? 'Priya' : dramaId === 900003 ? 'Jun' : 'Sam';
     await pool.query(
-      `INSERT INTO episodes (id, drama_id, season, number, title, minutes, added_by_id, added_by_username, is_demo, created_at)
+      `INSERT INTO tracker_episodes (id, drama_id, season, number, title, minutes, added_by_id, added_by_username, is_demo, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, now() - interval '30 days')
        ON CONFLICT (id) DO NOTHING`,
       [n, dramaId, season, number, title, minutes, DEMO_USERS[by], by]
     );
     // Ninth Street's newest episode was added this week ("New episode").
     if (dramaId === 900003 && season === 3 && number === 3) {
-      await pool.query(`UPDATE episodes SET created_at = now() - interval '2 days' WHERE id = $1`, [n]);
+      await pool.query(`UPDATE tracker_episodes SET created_at = now() - interval '2 days' WHERE id = $1`, [n]);
     }
     n++;
   }
@@ -1037,28 +1499,28 @@ async function seedDemo() {
   // setup. The clip is Big Buck Bunny (CC BY, Blender Foundation), from
   // test-videos.co.uk.
   await pool.query(
-    `UPDATE episodes SET media_url = 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+    `UPDATE tracker_episodes SET media_url = 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
         subtitle_url = '/demo/demo-subs.vtt'
       WHERE id = 9000012` // Harbour Lights, Season 2 Episode 6 "The Tide Table"
   );
   await pool.query(
-    `UPDATE episodes SET media_url = '/demo/demo-video.webm'
+    `UPDATE tracker_episodes SET media_url = '/demo/demo-video.webm'
       WHERE id = 9000063` // Copper Hill, Season 2 Episode 14 "The Last Shift"
   );
   // Access levels for the demo episodes: Harbour Lights season 2 mixes VIP
   // and ad episodes, The Quiet Wing is all VIP, Meridian Court has ads.
-  await pool.query(`UPDATE episodes SET access = 'vip' WHERE is_demo AND (
+  await pool.query(`UPDATE tracker_episodes SET access = 'vip' WHERE is_demo AND (
     (drama_id = 900001 AND season = 2 AND number = 6) OR drama_id = 900002)`);
-  await pool.query(`UPDATE episodes SET access = 'ads' WHERE is_demo AND (
+  await pool.query(`UPDATE tracker_episodes SET access = 'ads' WHERE is_demo AND (
     (drama_id = 900001 AND season = 2 AND number = 8) OR drama_id = 900004)`);
-  const eps = await pool.query(`SELECT id, drama_id, season, number FROM episodes WHERE is_demo = true`);
+  const eps = await pool.query(`SELECT id, drama_id, season, number FROM tracker_episodes WHERE is_demo = true`);
   const byKey = new Map(eps.rows.map(r => [r.drama_id + ':' + r.season + ':' + r.number, r.id]));
   for (const [name, uid] of Object.entries(DEMO_USERS)) {
     for (const [dramaId, season, number] of DEMO_WATCHES[name]) {
       const epId = byKey.get(dramaId + ':' + season + ':' + number);
       if (!epId) continue;
       await pool.query(
-        `INSERT INTO watches (user_id, username, episode_id, watched_at)
+        `INSERT INTO tracker_watches (user_id, username, episode_id, watched_at)
          VALUES ($1, $2, $3, now() - interval '20 days') ON CONFLICT DO NOTHING`,
         [uid, name, epId]
       );
@@ -1066,7 +1528,7 @@ async function seedDemo() {
   }
   for (const [name, dramaId] of DEMO_FOLLOWS) {
     await pool.query(
-      `INSERT INTO follows (user_id, username, drama_id, created_at)
+      `INSERT INTO tracker_follows (user_id, username, drama_id, created_at)
        VALUES ($1, $2, $3, now() - interval '10 days') ON CONFLICT DO NOTHING`,
       [DEMO_USERS[name], name, dramaId]
     );
@@ -1230,7 +1692,7 @@ async function seedSampleDramas() {
   for (const s of SAMPLE_DRAMAS) {
     const slug = s.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     await pool.query(
-      `INSERT INTO dramas
+      `INSERT INTO tracker_dramas
          (id, title, synopsis, added_by_id, added_by_username, is_demo, created_at,
           year, country, genres, rating, cast_list, poster_url)
        VALUES ($1, $2, $3, $4, $5, true, now() - make_interval(days => $6::int),
@@ -1245,7 +1707,7 @@ async function seedSampleDramas() {
       const minutes = 38 + ((s.id + i * 7) % 20);
       const access = s.vip.includes(number) ? 'vip' : s.ads.includes(number) ? 'ads' : 'free';
       await pool.query(
-        `INSERT INTO episodes
+        `INSERT INTO tracker_episodes
            (id, drama_id, season, number, title, minutes, watch_url, access,
             added_by_id, added_by_username, is_demo, created_at)
          VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, true,
@@ -1260,7 +1722,7 @@ async function seedSampleDramas() {
   }
   for (const [name, dramaId] of SAMPLE_FOLLOWS) {
     await pool.query(
-      `INSERT INTO follows (user_id, username, drama_id, created_at)
+      `INSERT INTO tracker_follows (user_id, username, drama_id, created_at)
        VALUES ($1, $2, $3, now() - interval '8 days') ON CONFLICT DO NOTHING`,
       [DEMO_USERS[name], name, dramaId]
     );
@@ -1278,19 +1740,19 @@ async function seedDemoViewer(user) {
   // Follow times are set so Harbour Lights sorts before The Quiet Wing in
   // Next to watch (its latest watch is the most recent of the two).
   await pool.query(
-    `INSERT INTO follows (user_id, username, drama_id, created_at)
+    `INSERT INTO tracker_follows (user_id, username, drama_id, created_at)
      VALUES ($1, $2, 900001, now() - interval '3 days') ON CONFLICT DO NOTHING`,
     [user.id, user.username]
   );
   await pool.query(
-    `INSERT INTO follows (user_id, username, drama_id, created_at)
+    `INSERT INTO tracker_follows (user_id, username, drama_id, created_at)
      VALUES ($1, $2, 900002, now() - interval '3 hours') ON CONFLICT DO NOTHING`,
     [user.id, user.username]
   );
-  const eps = await pool.query(`SELECT id, drama_id, season, number FROM episodes WHERE is_demo = true`);
+  const eps = await pool.query(`SELECT id, drama_id, season, number FROM tracker_episodes WHERE is_demo = true`);
   const byKey = new Map(eps.rows.map(r => [r.drama_id + ':' + r.season + ':' + r.number, r.id]));
   const put = (epId, ago) => pool.query(
-    `INSERT INTO watches (user_id, username, episode_id, watched_at)
+    `INSERT INTO tracker_watches (user_id, username, episode_id, watched_at)
      VALUES ($1, $2, $3, now() - $4::interval) ON CONFLICT DO NOTHING`,
     [user.id, user.username, epId, ago]
   );
@@ -1365,10 +1827,10 @@ async function nextToWatch(userId, demo) {
   const res = await pool.query(
     `SELECT f.drama_id,
             MAX(COALESCE(w.watched_at, f.created_at)) AS latest
-       FROM follows f
-       JOIN dramas d ON d.id = f.drama_id
-       LEFT JOIN watches w ON w.user_id = f.user_id
-        AND w.episode_id IN (SELECT id FROM episodes WHERE drama_id = f.drama_id
+       FROM tracker_follows f
+       JOIN tracker_dramas d ON d.id = f.drama_id
+       LEFT JOIN tracker_watches w ON w.user_id = f.user_id
+        AND w.episode_id IN (SELECT id FROM tracker_episodes WHERE drama_id = f.drama_id
                               AND ($2 OR NOT is_demo))
       WHERE f.user_id = $1 AND ($2 OR NOT d.is_demo)
       GROUP BY f.drama_id
@@ -1378,9 +1840,9 @@ async function nextToWatch(userId, demo) {
   for (const row of res.rows) {
     const un = await pool.query(
       `SELECT id, season, number, title, minutes, watch_url, media_url, access
-         FROM episodes
+         FROM tracker_episodes
         WHERE drama_id = $1 AND ($3 OR NOT is_demo) AND NOT EXISTS (
-          SELECT 1 FROM watches WHERE user_id = $2 AND episode_id = episodes.id)
+          SELECT 1 FROM tracker_watches WHERE user_id = $2 AND episode_id = tracker_episodes.id)
         ORDER BY season, number LIMIT 1`,
       [row.drama_id, userId, demo]
     );
@@ -1388,9 +1850,9 @@ async function nextToWatch(userId, demo) {
     const hero = un.rows[0];
     const later = await pool.query(
       `SELECT id, season, number, title, minutes, watch_url, media_url, access
-         FROM episodes
+         FROM tracker_episodes
         WHERE drama_id = $1 AND season = $2 AND number > $3 AND ($5 OR NOT is_demo)
-          AND NOT EXISTS (SELECT 1 FROM watches WHERE user_id = $4 AND episode_id = episodes.id)
+          AND NOT EXISTS (SELECT 1 FROM tracker_watches WHERE user_id = $4 AND episode_id = tracker_episodes.id)
         ORDER BY number LIMIT 3`,
       [row.drama_id, hero.season, hero.number, userId, demo]
     );
@@ -1402,11 +1864,11 @@ async function nextToWatch(userId, demo) {
 // On the first ?demo=1 request of the viewing account, write its demo
 // follows and watches (see seedDemoViewer). Awaited so the same request's
 // answers already carry them; the follow check makes later calls cheap.
-app.use('/api/', async (req, res, next) => {
+tracker.use(async (req, res, next) => {
   try {
     if (demoOn(req) && req.user) {
       const has = await pool.query(
-        `SELECT 1 FROM follows WHERE user_id = $1 AND drama_id = 900001`, [req.user.id]
+        `SELECT 1 FROM tracker_follows WHERE user_id = $1 AND drama_id = 900001`, [req.user.id]
       );
       if (!has.rows.length) {
         // The page fires /api/me and /api/feed in parallel; both would pass
@@ -1468,14 +1930,14 @@ async function seedStagingVip() {
 
 // Who is signed in, if anyone (the page asks, not the URL: at the app's own
 // address there is no ?token= for the frontend to read).
-app.get('/api/me', (req, res) => {
+tracker.get('/me', (req, res) => {
   res.json({
     user: req.user ? { id: req.user.id, username: req.user.username } : null,
     guest: !!req.guest,
   });
 });
 
-app.get('/api/feed', async (req, res) => {
+tracker.get('/feed', async (req, res) => {
   try {
     const demo = demoOn(req);
     const viewerId = req.user ? req.user.id : null;
@@ -1485,7 +1947,7 @@ app.get('/api/feed', async (req, res) => {
     const dramas = await pool.query(
       `SELECT id, title, synopsis, added_by_id, added_by_username, created_at,
               year, country, genres, rating, cast_list, poster_url
-         FROM dramas WHERE ${demoClause(req, 'is_demo', 1)}
+         FROM tracker_dramas WHERE ${demoClause(req, 'is_demo', 1)}
         ORDER BY created_at DESC, id DESC`,
       demoParams(req)
     );
@@ -1496,7 +1958,7 @@ app.get('/api/feed', async (req, res) => {
       `SELECT drama_id, COUNT(*) AS episodes, COUNT(DISTINCT season) AS seasons,
               COUNT(*) FILTER (WHERE access = 'vip') AS vip_count,
               COUNT(*) FILTER (WHERE access = 'ads') AS ads_count
-         FROM episodes WHERE ${demoClause(req, 'is_demo', 1)} AND drama_id = ANY($2)
+         FROM tracker_episodes WHERE ${demoClause(req, 'is_demo', 1)} AND drama_id = ANY($2)
         GROUP BY drama_id`, [...demoParams(req), ids]
     ) : { rows: [] };
     const countBy = new Map(counts.rows.map(c => [c.drama_id, c]));
@@ -1505,8 +1967,8 @@ app.get('/api/feed', async (req, res) => {
     let followed = new Set();
     if (viewerId && ids.length) {
       const f = await pool.query(
-        `SELECT drama_id FROM follows WHERE user_id = $1 AND drama_id = ANY($2)
-          AND ($3 OR NOT EXISTS (SELECT 1 FROM dramas d WHERE d.id = drama_id AND d.is_demo))`,
+        `SELECT drama_id FROM tracker_follows WHERE user_id = $1 AND drama_id = ANY($2)
+          AND ($3 OR NOT EXISTS (SELECT 1 FROM tracker_dramas d WHERE d.id = drama_id AND d.is_demo))`,
         [viewerId, ids, demo]
       );
       followed = new Set(f.rows.map(r => Number(r.drama_id)));
@@ -1517,11 +1979,11 @@ app.get('/api/feed', async (req, res) => {
     if (ids.length) {
       eps = await pool.query(
         `SELECT e.id, e.drama_id, e.season, e.number, e.created_at,
-                ARRAY(SELECT w.username FROM watches w WHERE w.episode_id = e.id
+                ARRAY(SELECT w.username FROM tracker_watches w WHERE w.episode_id = e.id
                       ORDER BY w.watched_at) AS watchers,
-                EXISTS (SELECT 1 FROM watches w WHERE w.episode_id = e.id AND w.user_id = $3) AS viewer_watched,
+                EXISTS (SELECT 1 FROM tracker_watches w WHERE w.episode_id = e.id AND w.user_id = $3) AS viewer_watched,
                 (e.created_at > now() - interval '7 days') AS is_new
-           FROM episodes e
+           FROM tracker_episodes e
           WHERE ${demoClause(req, 'e.is_demo', 1)} AND e.drama_id = ANY($2)
           ORDER BY e.season, e.number`,
         [...demoParams(req), ids, viewerId || 0]
@@ -1591,9 +2053,9 @@ app.get('/api/feed', async (req, res) => {
     // gating as the feed itself, so the plain route renders these rows from
     // the dramas it really has: empty when there are none.
     const followCounts = ids.length ? await pool.query(
-      `SELECT f.drama_id, COUNT(*)::int AS n FROM follows f
+      `SELECT f.drama_id, COUNT(*)::int AS n FROM tracker_follows f
         WHERE f.drama_id = ANY($2)
-          AND ($1 OR NOT EXISTS (SELECT 1 FROM dramas d WHERE d.id = f.drama_id AND d.is_demo))
+          AND ($1 OR NOT EXISTS (SELECT 1 FROM tracker_dramas d WHERE d.id = f.drama_id AND d.is_demo))
         GROUP BY f.drama_id`,
       [...demoParams(req), ids]
     ) : { rows: [] };
@@ -1663,7 +2125,7 @@ app.get('/api/feed', async (req, res) => {
   }
 });
 
-app.post('/api/dramas', async (req, res) => {
+tracker.post('/dramas', async (req, res) => {
   try {
     const title = typeof req.body.title === 'string' ? req.body.title.trim() : '';
     const synopsis = typeof req.body.synopsis === 'string' ? req.body.synopsis.trim() : '';
@@ -1694,7 +2156,7 @@ app.post('/api/dramas', async (req, res) => {
       return res.status(400).json({ error: 'The poster link must start with https://' });
     }
     const r = await pool.query(
-      `INSERT INTO dramas (title, synopsis, year, country, genres, rating, poster_url, added_by_id, added_by_username)
+      `INSERT INTO tracker_dramas (title, synopsis, year, country, genres, rating, poster_url, added_by_id, added_by_username)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
       [title, synopsis || null, year, country || null,
        genreList.length ? genreList.join(', ') : null,
@@ -1708,14 +2170,14 @@ app.post('/api/dramas', async (req, res) => {
   }
 });
 
-app.delete('/api/dramas/:id', async (req, res) => {
+tracker.delete('/dramas/:id', async (req, res) => {
   try {
-    const d = await pool.query(`SELECT added_by_id FROM dramas WHERE id = $1`, [req.params.id]);
+    const d = await pool.query(`SELECT added_by_id FROM tracker_dramas WHERE id = $1`, [req.params.id]);
     if (!d.rows.length) return res.status(404).json({ error: 'Drama not found' });
     if (Number(d.rows[0].added_by_id) !== Number(req.user.id)) {
       return res.status(403).json({ error: 'Only the person who added it can remove it' });
     }
-    await pool.query(`DELETE FROM dramas WHERE id = $1`, [req.params.id]);
+    await pool.query(`DELETE FROM tracker_dramas WHERE id = $1`, [req.params.id]);
     return res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -1723,14 +2185,14 @@ app.delete('/api/dramas/:id', async (req, res) => {
   }
 });
 
-app.get('/api/dramas/:id', async (req, res) => {
+tracker.get('/dramas/:id', async (req, res) => {
   try {
     const viewerId = req.user ? req.user.id : null;
     const vip = (await vipStatus(req)).vip;
     const d = await pool.query(
       `SELECT id, title, synopsis, added_by_id, added_by_username, created_at,
               year, country, genres, rating, cast_list, poster_url
-         FROM dramas WHERE id = $1 AND ${demoClause(req, 'is_demo', 2)}`,
+         FROM tracker_dramas WHERE id = $1 AND ${demoClause(req, 'is_demo', 2)}`,
       [req.params.id, ...demoParams(req)]
     );
     if (!d.rows.length) return res.status(404).json({ error: 'Drama not found' });
@@ -1739,15 +2201,15 @@ app.get('/api/dramas/:id', async (req, res) => {
       `SELECT e.id, e.season, e.number, e.title, e.minutes, e.watch_url,
               e.media_url, e.subtitle_url, e.access,
               e.added_by_id, e.added_by_username,
-              ARRAY(SELECT w.username FROM watches w WHERE w.episode_id = e.id
+              ARRAY(SELECT w.username FROM tracker_watches w WHERE w.episode_id = e.id
                     ORDER BY w.watched_at) AS watched_by,
-              EXISTS (SELECT 1 FROM watches w WHERE w.episode_id = e.id AND w.user_id = $3) AS viewer_watched
-         FROM episodes e WHERE e.drama_id = $1 AND ${demoClause(req, 'e.is_demo', 2)}
+              EXISTS (SELECT 1 FROM tracker_watches w WHERE w.episode_id = e.id AND w.user_id = $3) AS viewer_watched
+         FROM tracker_episodes e WHERE e.drama_id = $1 AND ${demoClause(req, 'e.is_demo', 2)}
         ORDER BY e.season, e.number`,
       [req.params.id, ...demoParams(req), viewerId || 0]
     );
     const following = viewerId
-      ? (await pool.query(`SELECT 1 FROM follows WHERE user_id = $1 AND drama_id = $2`, [viewerId, req.params.id])).rows.length > 0
+      ? (await pool.query(`SELECT 1 FROM tracker_follows WHERE user_id = $1 AND drama_id = $2`, [viewerId, req.params.id])).rows.length > 0
       : false;
     // The average rating rides this response (one aggregate), and the first
     // page of reviews does too, so the drama page needs no extra round-trip;
@@ -1813,10 +2275,10 @@ app.get('/api/dramas/:id', async (req, res) => {
   }
 });
 
-app.post('/api/dramas/:id/episodes', async (req, res) => {
+tracker.post('/dramas/:id/episodes', async (req, res) => {
   try {
     const d = await pool.query(
-      `SELECT id FROM dramas WHERE id = $1 AND ${demoClause(req, 'is_demo', 2)}`,
+      `SELECT id FROM tracker_dramas WHERE id = $1 AND ${demoClause(req, 'is_demo', 2)}`,
       [req.params.id, ...demoParams(req)]
     );
     if (!d.rows.length) return res.status(404).json({ error: 'Drama not found' });
@@ -1841,12 +2303,12 @@ app.post('/api/dramas/:id/episodes', async (req, res) => {
     const access = typeof req.body.access === 'string' && req.body.access ? req.body.access : 'free';
     if (!['free', 'vip', 'ads'].includes(access)) return res.status(400).json({ error: 'Access must be Free, VIP or Free with ads' });
     const exists = await pool.query(
-      `SELECT 1 FROM episodes WHERE drama_id = $1 AND season = $2 AND number = $3`,
+      `SELECT 1 FROM tracker_episodes WHERE drama_id = $1 AND season = $2 AND number = $3`,
       [req.params.id, season, number]
     );
     if (exists.rows.length) return res.status(409).json({ error: 'That season and episode number already exists' });
     const r = await pool.query(
-      `INSERT INTO episodes (drama_id, season, number, title, minutes, watch_url, media_url, subtitle_url, access, added_by_id, added_by_username)
+      `INSERT INTO tracker_episodes (drama_id, season, number, title, minutes, watch_url, media_url, subtitle_url, access, added_by_id, added_by_username)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
       [req.params.id, season, number, title, minutes, watch_url, media_url, subtitle_url, access, req.user.id, req.user.username]
     );
@@ -1857,14 +2319,14 @@ app.post('/api/dramas/:id/episodes', async (req, res) => {
   }
 });
 
-app.delete('/api/episodes/:id', async (req, res) => {
+tracker.delete('/episodes/:id', async (req, res) => {
   try {
-    const e = await pool.query(`SELECT added_by_id FROM episodes WHERE id = $1`, [req.params.id]);
+    const e = await pool.query(`SELECT added_by_id FROM tracker_episodes WHERE id = $1`, [req.params.id]);
     if (!e.rows.length) return res.status(404).json({ error: 'Episode not found' });
     if (Number(e.rows[0].added_by_id) !== Number(req.user.id)) {
       return res.status(403).json({ error: 'Only the person who added it can remove it' });
     }
-    await pool.query(`DELETE FROM episodes WHERE id = $1`, [req.params.id]);
+    await pool.query(`DELETE FROM tracker_episodes WHERE id = $1`, [req.params.id]);
     return res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -1872,15 +2334,15 @@ app.delete('/api/episodes/:id', async (req, res) => {
   }
 });
 
-app.put('/api/dramas/:id/follow', async (req, res) => {
+tracker.put('/dramas/:id/follow', async (req, res) => {
   try {
     const d = await pool.query(
-      `SELECT id FROM dramas WHERE id = $1 AND ${demoClause(req, 'is_demo', 2)}`,
+      `SELECT id FROM tracker_dramas WHERE id = $1 AND ${demoClause(req, 'is_demo', 2)}`,
       [req.params.id, ...demoParams(req)]
     );
     if (!d.rows.length) return res.status(404).json({ error: 'Drama not found' });
     await pool.query(
-      `INSERT INTO follows (user_id, username, drama_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+      `INSERT INTO tracker_follows (user_id, username, drama_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
       [req.user.id, req.user.username, req.params.id]
     );
     return res.json({ following: true });
@@ -1890,9 +2352,9 @@ app.put('/api/dramas/:id/follow', async (req, res) => {
   }
 });
 
-app.delete('/api/dramas/:id/follow', async (req, res) => {
+tracker.delete('/dramas/:id/follow', async (req, res) => {
   try {
-    await pool.query(`DELETE FROM follows WHERE user_id = $1 AND drama_id = $2`, [req.user.id, req.params.id]);
+    await pool.query(`DELETE FROM tracker_follows WHERE user_id = $1 AND drama_id = $2`, [req.user.id, req.params.id]);
     return res.json({ following: false });
   } catch (err) {
     console.error(err);
@@ -1900,16 +2362,16 @@ app.delete('/api/dramas/:id/follow', async (req, res) => {
   }
 });
 
-app.put('/api/episodes/:id/watched', async (req, res) => {
+tracker.put('/episodes/:id/watched', async (req, res) => {
   try {
-    const e = await pool.query(`SELECT id, access FROM episodes WHERE id = $1`, [req.params.id]);
+    const e = await pool.query(`SELECT id, access FROM tracker_episodes WHERE id = $1`, [req.params.id]);
     if (!e.rows.length) return res.status(404).json({ error: 'Episode not found' });
     // Server-side paywall: the write is refused and the answer explains why.
     if (e.rows[0].access === 'vip' && !(await vipStatus(req)).vip) {
       return res.status(403).json({ error: 'vip_required' });
     }
     await pool.query(
-      `INSERT INTO watches (user_id, username, episode_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+      `INSERT INTO tracker_watches (user_id, username, episode_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
       [req.user.id, req.user.username, req.params.id]
     );
     return res.json({ watched: true });
@@ -1919,9 +2381,9 @@ app.put('/api/episodes/:id/watched', async (req, res) => {
   }
 });
 
-app.delete('/api/episodes/:id/watched', async (req, res) => {
+tracker.delete('/episodes/:id/watched', async (req, res) => {
   try {
-    await pool.query(`DELETE FROM watches WHERE user_id = $1 AND episode_id = $2`, [req.user.id, req.params.id]);
+    await pool.query(`DELETE FROM tracker_watches WHERE user_id = $1 AND episode_id = $2`, [req.user.id, req.params.id]);
     return res.json({ watched: false });
   } catch (err) {
     console.error(err);
@@ -1930,7 +2392,7 @@ app.delete('/api/episodes/:id/watched', async (req, res) => {
 });
 
 // Recorded only, nothing is hidden automatically.
-app.post('/api/reports', async (req, res) => {
+tracker.post('/reports', async (req, res) => {
   try {
     const dramaId = req.body.drama_id ? parseInt(req.body.drama_id, 10) : null;
     const episodeId = req.body.episode_id ? parseInt(req.body.episode_id, 10) : null;
@@ -1939,7 +2401,7 @@ app.post('/api/reports', async (req, res) => {
     const reason = typeof req.body.reason === 'string' ? req.body.reason.trim() : null;
     if (reason && reason.length > 500) return res.status(400).json({ error: 'The reason must be 500 characters or fewer' });
     await pool.query(
-      `INSERT INTO reports (reporter_id, reporter_username, drama_id, episode_id, comment_id, reason)
+      `INSERT INTO tracker_reports (reporter_id, reporter_username, drama_id, episode_id, comment_id, reason)
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [req.user.id, req.user.username, dramaId, episodeId, commentId, reason]
     );
@@ -1956,15 +2418,15 @@ app.post('/api/reports', async (req, res) => {
 // drama, its neighbours in the same season (so the player can offer the
 // next one), the viewer's stored position, and whether they marked it.
 // Guests may watch read-only, like every GET.
-app.get('/api/watch/:episodeId', async (req, res) => {
+tracker.get('/watch/:episodeId', async (req, res) => {
   try {
     const viewerId = req.user ? req.user.id : null;
     const demo = demoOn(req);
     const e = await pool.query(
       `SELECT e.id, e.drama_id, e.season, e.number, e.title, e.minutes, e.watch_url,
               e.media_url, e.subtitle_url, e.access,
-              EXISTS (SELECT 1 FROM watches w WHERE w.episode_id = e.id AND w.user_id = $3::integer) AS viewer_watched
-         FROM episodes e
+              EXISTS (SELECT 1 FROM tracker_watches w WHERE w.episode_id = e.id AND w.user_id = $3::integer) AS viewer_watched
+         FROM tracker_episodes e
         WHERE e.id = $1 AND ($2 OR NOT e.is_demo)`,
       [req.params.episodeId, demo, viewerId || 0]
     );
@@ -1972,13 +2434,13 @@ app.get('/api/watch/:episodeId', async (req, res) => {
     // A locked VIP episode arrives without its watch and video links.
     const ep = gateEpisode(e.rows[0], await viewerIsVip(req));
     const d = await pool.query(
-      `SELECT id, title FROM dramas WHERE id = $1 AND ($2 OR NOT is_demo)`,
+      `SELECT id, title FROM tracker_dramas WHERE id = $1 AND ($2 OR NOT is_demo)`,
       [ep.drama_id, demo]
     );
     if (!d.rows.length) return res.status(404).json({ error: 'Episode not found' });
     const neighbours = await pool.query(
       `SELECT e.id, e.season, e.number, e.title, e.minutes, (e.media_url IS NOT NULL) AS has_media
-         FROM episodes e
+         FROM tracker_episodes e
         WHERE e.drama_id = $1 AND e.season = $2 AND ($3 OR NOT e.is_demo)
         ORDER BY e.number`,
       [ep.drama_id, ep.season, demo]
@@ -2016,9 +2478,9 @@ app.get('/api/watch/:episodeId', async (req, res) => {
 });
 
 // Where the viewer stopped. Called by the player as it plays.
-app.put('/api/episodes/:id/progress', async (req, res) => {
+tracker.put('/episodes/:id/progress', async (req, res) => {
   try {
-    const exists = await pool.query(`SELECT id FROM episodes WHERE id = $1`, [req.params.id]);
+    const exists = await pool.query(`SELECT id FROM tracker_episodes WHERE id = $1`, [req.params.id]);
     if (!exists.rows.length) return res.status(404).json({ error: 'Episode not found' });
     const position = parseInt(req.body.position_s, 10);
     const duration = req.body.duration_s ? parseInt(req.body.duration_s, 10) : null;
@@ -2058,7 +2520,10 @@ async function viewerIsVip(req) {
   if (demoVip(req)) return true;
   return (await vipStatus(req)).vip;
 }
-app.get('/api/subscription', async (req, res) => {
+// The subscription answer, shared by /api/tracker/subscription and the
+// top-level /api/subscription: before the routes moved under /api/tracker,
+// the VIP page called /api/subscription at the top level.
+async function subscriptionAnswer(req, res) {
   try {
     if (demoVip(req)) {
       return res.json({ vip: true, isVip: true, plan: 'vip', status: 'active', expires_at: null, demo: true });
@@ -2072,7 +2537,11 @@ app.get('/api/subscription', async (req, res) => {
     console.error('subscription lookup failed', err);
     return res.json(FREE_SUB);
   }
-});
+}
+
+tracker.get('/subscription', subscriptionAnswer);
+// Same answer at the old top-level path, which is still a public GET.
+app.get('/api/subscription', subscriptionAnswer);
 
 // First-party analytics. The event names are whitelisted server-side so a
 // stray client cannot invent schema; nothing here hides or shows anything.
@@ -2082,7 +2551,7 @@ const EVENT_NAMES = new Set([
   'subscription_intent', 'language_changed', 'install_prompt_accepted',
 ]);
 
-app.post('/api/events', async (req, res) => {
+tracker.post('/events', async (req, res) => {
   try {
     const batch = Array.isArray(req.body.events) ? req.body.events : [];
     if (!batch.length) return res.status(400).json({ error: 'An events array is required' });
@@ -2156,14 +2625,14 @@ function commentRow(c, viewerId) {
 // The filter that keeps demo threads invisible without ?demo=1: the comment's
 // parent episode must not be a demo episode. $demo is the ?demo=1 flag.
 const COMMENT_DEMO_FILTER = `($2 OR NOT EXISTS (
-  SELECT 1 FROM episodes e WHERE e.id = c.episode_id AND e.is_demo))`;
+  SELECT 1 FROM tracker_episodes e WHERE e.id = c.episode_id AND e.is_demo))`;
 
-app.get('/api/episodes/:id/comments', async (req, res) => {
+tracker.get('/episodes/:id/comments', async (req, res) => {
   try {
     const demo = demoOn(req);
     const viewerId = req.user ? req.user.id : null;
     const ep = await pool.query(
-      `SELECT id FROM episodes WHERE id = $1 AND ($2 OR NOT is_demo)`,
+      `SELECT id FROM tracker_episodes WHERE id = $1 AND ($2 OR NOT is_demo)`,
       [req.params.id, demo]
     );
     if (!ep.rows.length) return res.status(404).json({ error: 'Episode not found' });
@@ -2214,11 +2683,11 @@ app.get('/api/episodes/:id/comments', async (req, res) => {
   }
 });
 
-app.post('/api/episodes/:id/comments', async (req, res) => {
+tracker.post('/episodes/:id/comments', async (req, res) => {
   try {
     const demo = demoOn(req);
     const ep = await pool.query(
-      `SELECT id FROM episodes WHERE id = $1 AND ($2 OR NOT is_demo)`,
+      `SELECT id FROM tracker_episodes WHERE id = $1 AND ($2 OR NOT is_demo)`,
       [req.params.id, demo]
     );
     if (!ep.rows.length) return res.status(404).json({ error: 'Episode not found' });
@@ -2277,7 +2746,7 @@ app.post('/api/episodes/:id/comments', async (req, res) => {
   }
 });
 
-app.post('/api/comments/:id/like', async (req, res) => {
+tracker.post('/comments/:id/like', async (req, res) => {
   try {
     const demo = demoOn(req);
     const c = await pool.query(
@@ -2299,7 +2768,7 @@ app.post('/api/comments/:id/like', async (req, res) => {
   }
 });
 
-app.delete('/api/comments/:id/like', async (req, res) => {
+tracker.delete('/comments/:id/like', async (req, res) => {
   try {
     await pool.query(
       `DELETE FROM comment_likes WHERE user_id = $1 AND comment_id = $2`,
@@ -2315,7 +2784,7 @@ app.delete('/api/comments/:id/like', async (req, res) => {
   }
 });
 
-app.delete('/api/comments/:id', async (req, res) => {
+tracker.delete('/comments/:id', async (req, res) => {
   try {
     const c = await pool.query(`SELECT user_id FROM comments WHERE id = $1`, [req.params.id]);
     if (!c.rows.length) return res.status(404).json({ error: 'Comment not found' });
@@ -2332,10 +2801,10 @@ app.delete('/api/comments/:id', async (req, res) => {
 
 const REVIEWS_PER_PAGE = 20;
 
-app.get('/api/dramas/:id/reviews', async (req, res) => {
+tracker.get('/dramas/:id/reviews', async (req, res) => {
   try {
     const d = await pool.query(
-      `SELECT id FROM dramas WHERE id = $1 AND ${demoClause(req, 'is_demo', 2)}`,
+      `SELECT id FROM tracker_dramas WHERE id = $1 AND ${demoClause(req, 'is_demo', 2)}`,
       [req.params.id, ...demoParams(req)]
     );
     if (!d.rows.length) return res.status(404).json({ error: 'Drama not found' });
@@ -2379,11 +2848,11 @@ async function ratingSummary(dramaId) {
   return { rating_avg: avg, rating_count: count };
 }
 
-app.put('/api/dramas/:id/review', async (req, res) => {
+tracker.put('/dramas/:id/review', async (req, res) => {
   try {
     const demo = demoOn(req);
     const d = await pool.query(
-      `SELECT id FROM dramas WHERE id = $1 AND ($2 OR NOT is_demo)`,
+      `SELECT id FROM tracker_dramas WHERE id = $1 AND ($2 OR NOT is_demo)`,
       [req.params.id, demo]
     );
     if (!d.rows.length) return res.status(404).json({ error: 'Drama not found' });
@@ -2415,7 +2884,7 @@ app.put('/api/dramas/:id/review', async (req, res) => {
   }
 });
 
-app.delete('/api/dramas/:id/review', async (req, res) => {
+tracker.delete('/dramas/:id/review', async (req, res) => {
   try {
     await pool.query(
       `DELETE FROM reviews WHERE drama_id = $1 AND user_id = $2`, [req.params.id, req.user.id]
@@ -2468,57 +2937,55 @@ app.get('*', (req, res) => {
   </div>
 </body>`);
   }
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  // The shared drama tracker is its own page (/tracker, and Stripe's return
+  // at /tracker/vip/return); everything else is the app.
+  const isTracker = req.path === '/tracker' || req.path.startsWith('/tracker/');
+  res.sendFile(path.join(__dirname, 'public', isTracker ? 'tracker.html' : 'index.html'));
 });
 
-// ── Boot ──────────────────────────────────────────────────────────────────
-
+// Graceful shutdown per the platform conventions: stop accepting, drain
+// ~3s, close the pool, exit. Idempotent across SIGTERM + SIGINT.
+const DRAIN_MS = 3000;
 let server = null;
+let shuttingDown = false;
+
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} received, draining`);
+  if (server) {
+    server.close(() => {});
+    server.closeIdleConnections?.();
+    const t = setTimeout(() => server.closeAllConnections?.(), DRAIN_MS);
+    t.unref?.();
+  }
+  try {
+    await pool.end();
+  } catch (e) {
+    console.error('[shutdown] pool.end failed', e.message);
+  }
+  process.exit(0);
+}
 
 async function start() {
-  // Idempotent schema on boot, then (staging only) the demo dramas and the
-  // twelve sample dramas.
-  await ensureSchema();
+  await migrateLegacyTrackerTables();
+  await pool.query(SCHEMA_SQL);
+  await seedCatalog();
+  await ensureTrackerSchema();
   if (IS_STAGING) {
     try {
-      await seedDemo();
+      await seedTrackerDemo();
       await seedSampleDramas();
       await seedStagingVip();
     } catch (err) {
-      console.error('demo seed failed', err);
+      console.error('tracker demo seed failed', err);
     }
   }
   server = app.listen(port, () => console.log(`Listening on :${port}`));
   // Let Envoy retire idle upstream connections at 60s, with a 15s margin.
   server.keepAliveTimeout = 75_000;
-  // Stop accepting, drain about 3 s, close the pool and exit.
-  for (const sig of ['SIGTERM', 'SIGINT']) {
-    process.on(sig, () => {
-      server.close(() => {
-        pool.end().then(() => process.exit(0));
-      });
-      setTimeout(() => process.exit(0), 3000).unref();
-    });
-  }
 }
 
-// Shut down cleanly: stop accepting connections, drain for ~3s, close the
-// pool, exit.
-let shuttingDown = false;
-async function shutdown(signal) {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  console.log(`${signal} received, shutting down`);
-  setTimeout(() => process.exit(0), 3000).unref();
-  try {
-    if (server) server.close();
-    await pool.end();
-    process.exit(0);
-  } catch (err) {
-    console.error(err);
-    process.exit(1);
-  }
-}
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 

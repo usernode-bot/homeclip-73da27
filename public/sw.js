@@ -8,7 +8,7 @@
 
 var VERSION = 'hc-v1';
 var SHELL = [
-  '/',
+  '/tracker',
   '/app.js',
   '/i18n.js',
   '/screens.css',
@@ -59,11 +59,11 @@ self.addEventListener('fetch', function (e) {
       fetch(req).then(function (res) {
         if (res && res.ok) {
           var copy = res.clone();
-          caches.open(VERSION).then(function (c) { c.put('/', copy); });
+          caches.open(VERSION).then(function (c) { c.put('/tracker', copy); });
         }
         return res;
       }).catch(function () {
-        return caches.match('/').then(function (hit) {
+        return caches.match('/tracker').then(function (hit) {
           return hit || Response.error();
         });
       })

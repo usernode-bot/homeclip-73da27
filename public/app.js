@@ -20,7 +20,7 @@
   function api(path, opts) {
     opts = opts || {};
     var sep = path.indexOf('?') === -1 ? '?' : '&';
-    var url = '/api/' + path + (DEMO ? sep + 'demo=1' : '');
+    var url = '/api/tracker/' + path + (DEMO ? sep + 'demo=1' : '');
     var headers = Object.assign(
       { 'Content-Type': 'application/json' },
       TOKEN ? { 'x-usernode-token': TOKEN } : {}
@@ -1809,30 +1809,31 @@
     var hash = location.hash || '#/';
     var m;
     if ((m = hash.match(/^#\/watch\/(\d+)$/))) {
-      history.replaceState(null, '', '/');
+      history.replaceState(null, '', '/tracker');
       return ['watch', m[1]];
     }
     if ((m = hash.match(/^#\/drama\/(\d+)(?:\?ep=(\d+))?$/))) {
-      history.replaceState(null, '', '/');
+      history.replaceState(null, '', '/tracker');
       return ['drama', m[1], m[2]];
     }
     // The VIP screens keep their hash: Stripe's return lands on the path.
     if ((m = hash.match(/^#\/vip(?:\/(manage|payments|return))?\/?$/))) return ['vip', m[1]];
     if (hash === '#/downloads') {
-      history.replaceState(null, '', '/');
+      history.replaceState(null, '', '/tracker');
       return ['downloads'];
     }
-    if ((m = location.pathname.match(/^\/watch\/(\d+)$/))) return ['watch', m[1]];
-    if ((m = location.pathname.match(/^\/drama\/(\d+)$/))) return ['drama', m[1]];
-    if (location.pathname === '/downloads') return ['downloads'];
-    if ((m = location.pathname.match(/^\/vip(?:\/(manage|payments|return))?\/?$/))) return ['vip', m[1]];
+    var pathname = location.pathname.replace(/^\/tracker(?=\/|$)/, '') || '/';
+    if ((m = pathname.match(/^\/watch\/(\d+)$/))) return ['watch', m[1]];
+    if ((m = pathname.match(/^\/drama\/(\d+)$/))) return ['drama', m[1]];
+    if (pathname === '/downloads') return ['downloads'];
+    if ((m = pathname.match(/^\/vip(?:\/(manage|payments|return))?\/?$/))) return ['vip', m[1]];
     return ['home'];
   }
 
   // The hash carries the route; Stripe's return lands on the path
   // /vip/return with no hash.
   function routeKey() {
-    return location.hash && location.hash !== '#' ? location.hash.slice(1) : location.pathname;
+    return location.hash && location.hash !== '#' ? location.hash.slice(1) : location.pathname.replace(/^\/tracker(?=\/)/, '');
   }
 
   function route() {
@@ -1904,7 +1905,7 @@
   // refuses storage; that is a normal degradation, not an error to surface.
   if ('serviceWorker' in navigator) {
     try {
-      navigator.serviceWorker.register('/sw.js').catch(function () {});
+      navigator.serviceWorker.register('/sw.js', { scope: '/tracker' }).catch(function () {});
     } catch (e) {}
   }
   // Installability at the app's own address: remember the prompt event so
@@ -1918,7 +1919,7 @@
     track('install_prompt_accepted');
   });
 
-  if (!/^#\/(drama|watch)\/\d+(\?ep=\d+)?$/.test(location.hash || '#/') && !/^\/(drama|watch)\/\d+$/.test(location.pathname) && location.pathname !== '/downloads' && (location.hash || '#/') !== '#/downloads' && !/^\/vip/.test(routeKey())) {
+  if (!/^#\/(drama|watch)\/\d+(\?ep=\d+)?$/.test(location.hash || '#/') && !/^\/(drama|watch)\/\d+$/.test(location.pathname.replace(/^\/tracker/, '')) && location.pathname.replace(/^\/tracker/, '') !== '/downloads' && (location.hash || '#/') !== '#/downloads' && !/^\/vip/.test(routeKey())) {
     renderHomeSkeleton();
   }
   route();

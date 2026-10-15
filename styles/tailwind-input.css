@@ -3,59 +3,47 @@
  * Deliberately OUTSIDE public/ so it is never served — the @tailwind lines
  * are build-time directives and mean nothing to a browser. npm run build
  * compiles this to public/tailwind.css with Docker or Paketo.
- *
- * "base" is the preflight layer (the cross-browser reset). Keep all three
- * layers, in this order; dropping base changes every heading, list and form
- * control.
  */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 /* ── Colour tokens ────────────────────────────────────────────────────────
- * This app's palette, defined once. Each value is "R G B"; tailwind.config.js
- * names them (bg-ground, bg-surface, text-fg, text-muted, border-line,
- * bg-accent with text-on-accent, ...). :root is the light look, and .dark,
- * which the theme script in public/index.html sets on <html>, the dark one.
- *
- * Re-theme the app HERE: change the values, keep the names. The defaults
- * (warm greys, one teal accent) are a quiet starting point, not a look.
- * Keep every text pair at 4.5:1 or more in both looks: fg and muted on
- * ground, surface and raised; accent and danger on ground and surface;
- * on-accent on accent; on-danger on danger.
- *
- * Adopting the native UI kit later? Point its --un-accent and
- * --un-accent-contrast at the accent and on-accent tokens.
+ * HomeClip's palette: a cinematic dark-indigo ground with a violet/blue
+ * accent (the brand), and a calm light look for viewers who prefer it.
+ * Each value is "R G B"; tailwind.config.js names them (bg-ground,
+ * bg-surface, text-fg, text-muted, border-line, bg-accent with
+ * text-on-accent, ...). Re-theme HERE: change the values, keep the names.
  */
 @layer base {
   :root {
-    --ground: 250 250 249;    /* the page */
+    --ground: 247 247 252;    /* the page */
     --surface: 255 255 255;   /* lists, cards, fields */
-    --raised: 245 245 244;    /* hovers, badges */
-    --fg: 28 25 23;           /* text */
-    --muted: 87 83 78;        /* secondary text */
-    --line: 231 229 228;      /* borders, dividers, skeletons */
-    --accent: 15 118 110;     /* the one accent */
-    --on-accent: 255 255 255; /* text on the accent */
+    --raised: 240 240 248;    /* hovers, badges */
+    --fg: 24 24 36;           /* text */
+    --muted: 92 92 114;       /* secondary text */
+    --line: 225 225 238;      /* borders, dividers, skeletons */
+    --accent: 92 74 235;      /* the one accent: brand violet-blue */
+    --on-accent: 255 255 255;
     --danger: 185 28 28;
     --on-danger: 255 255 255;
-    --focus: 13 148 136;      /* the keyboard focus ring */
-    --action: 180 83 9; /* from the spec's screens */
-    --on-action: 255 255 255; /* from the spec's screens */
-    --action-soft: 254 243 199; /* from the spec's screens */
+    --focus: 92 74 235;
+    --action: 180 83 9;       /* the drama tracker's action and progress amber */
+    --on-action: 255 255 255;
+    --action-soft: 254 243 199;
   }
   .dark {
-    --ground: 12 10 9;
-    --surface: 28 25 23;
-    --raised: 41 37 36;
-    --fg: 245 245 244;
-    --muted: 168 162 158;
-    --line: 68 64 60;
-    --accent: 45 212 191;
-    --on-accent: 4 47 46;
+    --ground: 10 10 20;
+    --surface: 22 22 36;
+    --raised: 33 33 51;
+    --fg: 240 240 248;
+    --muted: 158 158 180;
+    --line: 47 47 68;
+    --accent: 126 108 255;
+    --on-accent: 255 255 255;
     --danger: 248 113 113;
     --on-danger: 69 10 10;
-    --focus: 94 234 212;
+    --focus: 140 124 255;
     --action: 251 191 36;    /* amber for the action and for progress */
     --on-action: 69 26 3;
     --action-soft: 69 26 3;  /* the "New episode" tint, with amber text */
@@ -68,22 +56,17 @@
 }
 
 /* ── Components ───────────────────────────────────────────────────────────
- * A small starting kit on the tokens. Use these rather than restyling the
- * same thing by hand, add to them sparingly, and change a component here
- * rather than one copy of it. Type: text-title, text-heading, text-body and
- * text-small (tailwind.config.js), nothing in between.
+ * Built on the shared kit (buttons, fields, lists, cards, states below) and
+ * HomeClip's own pieces on top. Type: text-title, text-heading, text-body
+ * and text-small, nothing in between. No heavy blur, no large shadows.
  */
 @layer components {
-  /* Each screen's content in one centred column, <main
-     class="page-column">. A phone fills it; a wider window keeps it a
-     readable column instead of stretching rows and buttons across the
-     window. The screen's own padding goes inside it. */
+  /* Each screen's content in one centred column. */
   .page-column {
     @apply mx-auto w-full max-w-2xl;
   }
 
-  /* Buttons: one primary per screen, the rest secondary. At least 44 px
-     each way, so they are easy to tap. */
+  /* Buttons: one primary per screen, the rest secondary. At least 44 px. */
   .btn-primary,
   .btn-secondary {
     @apply inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-lg px-4 text-body font-medium
@@ -91,22 +74,19 @@
       focus-visible:ring-offset-ground disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply bg-accent text-on-accent hover:brightness-95;
+    @apply bg-accent text-on-accent hover:brightness-110;
   }
   .btn-secondary {
     @apply border border-line bg-surface text-fg hover:bg-raised;
   }
 
-  /* Text inputs, selects and textareas: <input class="field">, 44 px tall.
-     The placeholder is a faint hint (muted at 60%), so an example such as
-     "5.0" never reads as a value somebody already typed in. */
+  /* Text inputs, selects and textareas: 44 px tall. */
   .field {
     @apply block min-h-11 w-full rounded-lg border border-line bg-surface px-3 py-2 text-body text-fg
       placeholder:text-muted/60 focus:outline-none focus:ring-2 focus:ring-focus;
   }
 
-  /* A grouped list: <ul class="list"> of <li class="list-row">. The usual
-     way to show several things; prefer it to a stack of cards. */
+  /* A grouped list. */
   .list {
     @apply divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface;
   }
@@ -114,22 +94,8 @@
     @apply flex min-h-11 items-center gap-3 px-4 py-3;
   }
 
-  /* A card: one self-contained thing, usually something you tap. Most
-     screens need none. Never put a card inside a card or a .list. */
   .card {
     @apply rounded-xl border border-line bg-surface p-4;
-  }
-
-  /* Access and status chips: the VIP badge (accent, with the lock icon) and
-     the neutral chip for "Free" / "Free with ads" and statuses. */
-  .chip {
-    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-small font-medium;
-  }
-  .chip-vip {
-    @apply bg-accent text-on-accent;
-  }
-  .chip-soft {
-    @apply bg-raised text-muted;
   }
 
   /* The label above a section: sentence case, never uppercase or tracked. */
@@ -137,20 +103,179 @@
     @apply mb-2 px-1 text-small font-medium text-muted;
   }
 
-  /* The states of anything that loads data. Show exactly one at a time:
-     - loading: the content's own shape, never a blank: the same list and
-       rows at their height, with .skeleton bars where their text goes, so
-       nothing moves when the data arrives;
-     - empty, only when the load WORKED and found nothing: a title, one
-       sentence and the action that fills it;
-     - error, only when the load FAILED: what failed, what still works,
-       and a Retry button.
-     Never show the empty state while loading or for a failure. */
+  /* Data states: loading shape, empty, error. */
   .skeleton {
     @apply rounded-md bg-line motion-safe:animate-pulse;
   }
   .state-empty,
   .state-error {
     @apply flex flex-col items-center gap-2 px-4 py-8 text-center;
+  }
+
+  /* ── HomeClip pieces ────────────────────────────────────────────────── */
+
+  /* A drama poster tile: 2:3, rounded. The <img> inside keeps its ratio and
+     a neutral placeholder colour while it lazy-loads. */
+  .poster {
+    @apply block overflow-hidden rounded-xl border border-line bg-raised;
+    aspect-ratio: 2 / 3;
+  }
+  .poster img {
+    @apply h-full w-full object-cover;
+  }
+
+  /* Genre chips: a horizontal, scrollable filter row. */
+  .chip {
+    @apply inline-flex min-h-9 shrink-0 items-center whitespace-nowrap rounded-full border border-line
+      bg-surface px-3 text-small font-medium text-muted hover:bg-raised focus-visible:outline-none
+      focus-visible:ring-2 focus-visible:ring-focus;
+  }
+  .chip[aria-pressed="true"],
+  .chip.is-active {
+    @apply border-transparent bg-accent text-on-accent;
+  }
+
+  /* Access chips (drama tracker): the VIP badge (accent, with the lock icon)
+     and the neutral chip for "Free with ads" and statuses. They sit on the
+     .chip base above/below and the tracker's screens.css. */
+  .chip-vip,
+  .chip.chip-vip {
+    @apply bg-accent text-on-accent;
+  }
+  .chip-soft,
+  .chip.chip-soft {
+    @apply bg-raised text-muted;
+  }
+
+  /* Horizontal poster row (Trending, New Episodes, ...). */
+  .hc-row {
+    @apply flex gap-3 overflow-x-auto pb-2;
+    scrollbar-width: none;
+  }
+  .hc-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Top 10 rank badge, drawn over a poster's corner. */
+  .hc-rank {
+    @apply absolute left-1.5 top-1.5 z-10 flex h-7 w-7 items-center justify-center rounded-full
+      bg-accent text-small font-bold text-on-accent;
+  }
+
+  /* The auto-sliding featured banner. */
+  .hc-banner {
+    @apply relative overflow-hidden rounded-2xl border border-line bg-raised;
+    aspect-ratio: 16 / 9;
+  }
+  .hc-banner img {
+    @apply h-full w-full object-cover;
+  }
+  .hc-banner .hc-banner-text {
+    @apply absolute inset-x-0 bottom-0 flex flex-col gap-1 p-4 text-white;
+    /* Artwork sits under this scrim in both looks, so the label stays
+       readable without following the theme's ground colour. */
+    background: linear-gradient(to top, rgb(0 0 0 / 0.78), rgb(0 0 0 / 0.35) 55%, transparent);
+  }
+  .hc-banner .hc-banner-text .text-muted {
+    color: rgb(255 255 255 / 0.75);
+  }
+  .hc-banner-dot {
+    @apply h-1.5 w-4 rounded-full bg-line;
+  }
+  .hc-banner-dot.is-active {
+    @apply bg-accent;
+  }
+
+  /* Continue-watching progress bar under a poster. */
+  .hc-progress {
+    @apply mt-1 block h-1 w-full overflow-hidden rounded-full bg-line;
+  }
+  .hc-progress > span {
+    @apply block h-full rounded-full bg-accent;
+  }
+
+  /* Bottom tab bar: fixed, safe-area aware (the platform forwards the real
+     insets; env() covers standalone). */
+  .hc-tabbar {
+    @apply fixed inset-x-0 bottom-0 z-40 mx-auto flex max-w-2xl border-t border-line bg-surface;
+    padding-bottom: var(--un-safe-inset-bottom, env(safe-area-inset-bottom, 0px));
+  }
+  .hc-tabbar button {
+    @apply flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 px-1 text-small text-muted
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus;
+  }
+  .hc-tabbar button.is-active {
+    @apply text-accent;
+  }
+  .hc-tabbar button svg {
+    @apply h-6 w-6;
+  }
+
+  /* Small toggle switch (Settings → Notifications), no UI-kit dependency. */
+  .hc-switch {
+    @apply relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full bg-line
+      transition-colors duration-200;
+  }
+  .hc-switch::after {
+    content: "";
+    @apply absolute left-1 h-5 w-5 rounded-full bg-surface shadow-sm transition-transform duration-200;
+  }
+  .hc-switch[aria-checked="true"] {
+    @apply bg-accent;
+  }
+  .hc-switch[aria-checked="true"]::after {
+    transform: translateX(1.25rem);
+  }
+
+  /* A simple bottom sheet (episode switcher, player menus). */
+  .hc-sheet-backdrop {
+    @apply fixed inset-0 z-50 bg-black/50;
+  }
+  .hc-sheet {
+    @apply fixed inset-x-0 bottom-0 z-50 mx-auto max-h-[70vh] max-w-2xl overflow-y-auto rounded-t-2xl
+      border border-line bg-surface p-4;
+    padding-bottom: calc(1rem + var(--un-safe-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  }
+
+  /* Video player stage: fixed 16:9 at the top of the screen. */
+  .hc-player-stage {
+    @apply relative w-full bg-black;
+    aspect-ratio: 16 / 9;
+  }
+  .hc-player-controls {
+    @apply absolute inset-x-0 bottom-0 p-2 pt-6;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.78), transparent);
+    /* The wrap spans the whole stage; taps outside its controls must fall
+       through to the video (tap to toggle playback). */
+    pointer-events: none;
+  }
+  .hc-player-controls button,
+  .hc-player-controls input {
+    pointer-events: auto;
+  }
+  .hc-seek {
+    @apply h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/25;
+  }
+  .hc-seek::-webkit-slider-thumb {
+    @apply h-4 w-4 appearance-none rounded-full bg-accent;
+  }
+  .hc-seek::-moz-range-thumb {
+    @apply h-4 w-4 appearance-none rounded-full border-none bg-accent;
+  }
+  .hc-iconbtn {
+    @apply inline-flex h-11 min-w-11 items-center justify-center rounded-lg text-fg
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus;
+  }
+
+  /* Segmented control (Language, Theme). */
+  .hc-segment {
+    @apply flex gap-1 rounded-lg border border-line bg-surface p-1;
+  }
+  .hc-segment button {
+    @apply flex-1 rounded-md px-2 py-2 text-small text-muted focus-visible:outline-none
+      focus-visible:ring-2 focus-visible:ring-focus;
+  }
+  .hc-segment button[aria-pressed="true"] {
+    @apply bg-accent text-on-accent;
   }
 }
