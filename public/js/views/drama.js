@@ -2,7 +2,8 @@
 // cast, episode list, Play / Continue and Add to My List.
 
 import { api } from '../api.js';
-import { el, skeletonDetail, errorState, posterUrl, emptyState, icon, toast, timeFmt } from '../ui.js';
+import { el, skeletonDetail, errorState, emptyState, icon, toast, timeFmt } from '../ui.js';
+import { artImg, backdropArt, lqipArt, stillArt } from '../art.js';
 import { t, genreLabel, countryLabel, getLang } from '../i18n.js';
 import { navigate } from '../router.js';
 
@@ -52,10 +53,21 @@ export async function render({ view, params, query }) {
   const root = el('<div class="hc-detail"></div>');
   view.appendChild(root);
 
+  // Wide backdrop above the facts, when the drama carries artwork (16:9
+  // so the page never shifts while it loads).
+  if (backdropArt(d.id)) {
+    root.appendChild(el(
+      '<div class="hc-backdrop mb-4">' +
+        '<img data-art data-fallback="/banner/' + d.id + '.svg" src="' + backdropArt(d.id) + '" alt="" loading="lazy" decoding="async"' +
+        ' style="background-image:url(' + lqipArt(d.id, 'b') + ');background-size:cover;background-position:center">' +
+      '</div>'
+    ));
+  }
+
   // Header: poster + facts
   root.appendChild(el(
     '<div class="flex gap-4">' +
-      '<span class="poster w-32 shrink-0"><img loading="lazy" decoding="async" src="' + posterUrl(d.id) + '" alt="' + d.title.replace(/"/g, '&quot;') + '"></span>' +
+      '<span class="poster w-32 shrink-0">' + artImg(d.id, { width: 600, alt: d.title.replace(/"/g, '&quot;') }) + '</span>' +
       '<div class="flex min-w-0 flex-1 flex-col justify-center gap-1">' +
         '<h1 class="text-heading">' + d.title + '</h1>' +
         '<p class="text-small text-muted">' + d.year + ' · ' + countryLabel(d.country) + '</p>' +
@@ -128,9 +140,15 @@ export async function render({ view, params, query }) {
   );
   const epList = epSection.querySelector('[data-episodes]');
   for (const epn of episodes) {
+    const still = stillArt(d.id, epn.num, d.genres[0]);
     const row = el(
       '<li><a class="list-row" data-nav href="/watch/' + d.id + '/' + epn.num + '">' +
-        '<span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-small font-medium text-fg">' + epn.num + '</span>' +
+        '<span class="hc-still relative shrink-0">' +
+          (still
+            ? '<img data-art loading="lazy" decoding="async" src="' + still + '" alt="">'
+            : '') +
+          '<span class="hc-still-num">' + epn.num + '</span>' +
+        '</span>' +
         '<span class="min-w-0 flex-1">' +
           '<span class="block truncate text-body text-fg">' + t('detail.episode', { n: epn.num }) + '</span>' +
           '<span class="block text-small text-muted">' + epn.duration_min + ' ' + t('time.min') +

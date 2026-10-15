@@ -1400,6 +1400,7 @@ async function ensureTrackerSchema() {
     CHECK (rating IS NULL OR (rating BETWEEN 0 AND 10))`);
   await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS cast_list TEXT`);
   await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS poster_url TEXT`);
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS backdrop_url TEXT`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tracker_episodes (
       id BIGSERIAL PRIMARY KEY,
@@ -2357,13 +2358,18 @@ tracker.post('/dramas', async (req, res) => {
     if (poster_url && (!/^https:\/\//.test(poster_url) || poster_url.length > 500)) {
       return res.status(400).json({ error: 'The poster link must start with https://' });
     }
+    const backdrop_url = typeof req.body.backdrop_url === 'string' && req.body.backdrop_url.trim()
+      ? req.body.backdrop_url.trim() : null;
+    if (backdrop_url && (!/^https:\/\//.test(backdrop_url) || backdrop_url.length > 500)) {
+      return res.status(400).json({ error: 'The backdrop link must start with https://' });
+    }
     const r = await pool.query(
-      `INSERT INTO tracker_dramas (title, synopsis, year, country, genres, rating, poster_url, added_by_id, added_by_username)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      `INSERT INTO tracker_dramas (title, synopsis, year, country, genres, rating, poster_url, backdrop_url, added_by_id, added_by_username)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
       [title, synopsis || null, year, country || null,
        genreList.length ? genreList.join(', ') : null,
        rating == null ? null : Math.round(rating * 10) / 10,
-       poster_url, req.user.id, req.user.username]
+       poster_url, backdrop_url, req.user.id, req.user.username]
     );
     return res.status(201).json({ drama: r.rows[0] });
   } catch (err) {
@@ -2393,7 +2399,7 @@ tracker.get('/dramas/:id', async (req, res) => {
     const vip = (await vipStatus(req)).vip;
     const d = await pool.query(
       `SELECT id, title, synopsis, added_by_id, added_by_username, created_at,
-              year, country, genres, rating, cast_list, poster_url
+              year, country, genres, rating, cast_list, poster_url, backdrop_url
          FROM tracker_dramas WHERE id = $1 AND ${demoClause(req, 'is_demo', 2)}`,
       [req.params.id, ...demoParams(req)]
     );

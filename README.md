@@ -29,9 +29,13 @@ The group also keeps a shared **drama tracker** at `/tracker` (see below).
 ## Content
 
 All 30 dramas in `data/catalog.js` are invented for this app: original
-titles, synopses and cast names, with placeholder poster and banner
-artwork generated as SVG from the drama itself (`/poster/:id.svg`,
-`/banner/:id.svg`). Episode video is one committed royalty-free sample
+titles, synopses and cast names. The poster, backdrop and episode-still
+artwork (committed WebP under `public/img/`) are free-license
+photographs served via picsum.photos (Unsplash license), each chosen to
+match its drama's genre and mood; no real show, person or logo appears
+in any of them. The generated SVG art (`/poster/:id.svg`,
+`/banner/:id.svg`) remains as the fallback when an image fails to load.
+Episode video is one committed royalty-free sample
 clip (`public/sample/`, CC0, served as both `.webm` and `.mp4`) and
 sample subtitle files (`/subtitles/:lang.vtt`). Nothing copyrighted is
 used anywhere.

@@ -52,7 +52,11 @@
     { "name": "Manage subscription renders", "path": "/tracker#/vip/manage", "expectText": "Manage subscription" },
     { "name": "Payment history renders", "path": "/tracker#/vip/payments", "expectText": "Payment history" },
     { "id": "profiles.screen", "name": "Profiles screen", "path": "/profiles", "expectText": "Add profile", "visual": true, "impact": ["public/js/views/profiles.js", "public/js/views/profile.js", "public/js/router.js", "styles/**", "server.js"] },
-    { "id": "add.screen", "name": "Add a drama screen", "path": "/add", "expectText": "Add a drama", "visual": true, "impact": ["public/js/views/add.js", "public/js/views/profile.js", "public/js/router.js", "styles/**"] },
+    { "id": "add.screen", "name": "Add a drama screen", "path": "/add", "expectText": "Add a drama", "expectSelector": "input[type='file'][accept='image/jpeg,image/png,image/webp']", "visual": true, "impact": ["public/js/views/add.js", "public/js/views/profile.js", "public/js/router.js", "styles/**"] },
+    { "id": "art.home", "name": "Home shows original artwork", "path": "/", "expectSelector": "img[src*='/img/poster/']", "visual": true, "impact": ["public/js/art.js", "public/js/ui.js", "public/js/views/home.js", "public/img/**", "styles/**"] },
+    { "name": "Discover grid shows original posters", "path": "/discover", "expectSelector": "img[src*='/img/poster/']" },
+    { "name": "Drama detail shows backdrop", "path": "/drama/1", "expectSelector": ".hc-backdrop img[src*='/img/backdrop/']", "expectText": "Paper Lanterns at Dusk" },
+    { "name": "Episode list shows stills", "path": "/drama/1", "expectSelector": ".hc-still img[src*='/img/still/']" },
     { "name": "Profiles populated demo", "path": "/profiles?demo=1", "expectText": "Who's watching?" }
   ],
   "visibility": {

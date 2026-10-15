@@ -3,16 +3,13 @@
 // the kit's tokens/components in styles/tailwind-input.css.
 
 import { t, genreLabel, countryLabel } from './i18n.js';
+import { artImg } from './art.js';
 
 // Small DOM builder: el(`<p class="x">hi</p>`) → Element.
 export function el(html) {
   const tpl = document.createElement('template');
   tpl.innerHTML = html.trim();
   return tpl.content.firstElementChild;
-}
-
-export function posterUrl(id) {
-  return '/poster/' + id + '.svg';
 }
 
 export function timeFmt(sec) {
@@ -69,7 +66,7 @@ function buildCard(d, opts) {
     '<a class="hc-card block shrink-0 ' + (opts2.grid ? 'w-full' : 'w-28') + '" ' +
       'href="' + (opts2.href || '/drama/' + d.id) + '" data-nav>' +
       '<span class="poster relative">' +
-        '<img loading="lazy" decoding="async" src="' + posterUrl(d.id) + '" alt="' + d.title.replace(/"/g, '&quot;') + '">' +
+        artImg(d.id, { alt: d.title.replace(/"/g, '&quot;') }) +
         (opts2.rank ? '<span class="hc-rank">' + opts2.rank + '</span>' : '') +
       '</span>' +
       '<p class="mt-1.5 truncate text-small font-medium text-fg">' + d.title + '</p>' +

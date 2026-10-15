@@ -2,7 +2,8 @@
 // continue-from-last-minute and removal.
 
 import { api } from '../api.js';
-import { el, posterUrl, icon, toast, timeFmt, errorState } from '../ui.js';
+import { el, icon, toast, timeFmt, errorState } from '../ui.js';
+import { artImg } from '../art.js';
 import { t, genreLabel } from '../i18n.js';
 import { navigate } from '../router.js';
 
@@ -26,7 +27,8 @@ function skeletonList() {
 }
 
 function posterThumb(d) {
-  return '<img class="h-20 w-14 shrink-0 rounded-md border border-line object-cover" loading="lazy" decoding="async" src="' + posterUrl(d.id) + '" alt="">';
+  return '<span class="block h-20 w-14 shrink-0 overflow-hidden rounded-md border border-line bg-raised" style="aspect-ratio:2/3">' +
+    artImg(d.id, { cls: 'h-full w-full object-cover' }) + '</span>';
 }
 
 export async function render({ view, query }) {
