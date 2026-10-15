@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy · HomeClip</title>
+  <meta name="description" content="What HomeClip stores, and what it never does.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='8' y='14' width='84' height='60' rx='10' fill='%23181512'/><rect x='16' y='22' width='68' height='44' rx='6' fill='%23fbbf24'/><rect x='40' y='80' width='20' height='8' rx='3' fill='%23181512'/></svg>">
+  <link rel="stylesheet" href="/tailwind.css">
+  <link rel="stylesheet" href="/screens.css">
+  <script src="/usernode-bridge/v1/bridge.js"></script>
+  <script>
+    (function () {
+      var media = window.matchMedia('(prefers-color-scheme: dark)');
+      function applyTheme() {
+        var theme = (window.usernode && window.usernode.theme) || (media.matches ? 'dark' : 'light');
+        document.documentElement.classList.toggle('dark', theme === 'dark');
+        document.documentElement.style.colorScheme = theme;
+      }
+      applyTheme();
+      window.addEventListener('usernode:theme-changed', applyTheme);
+      media.addEventListener('change', applyTheme);
+    })();
+  </script>
+  <style>
+    .legal {max-width:640px;margin:0 auto;padding:24px 20px 48px}
+    .legal h1 {font-size:28px;line-height:34px;font-weight:700;margin:8px 0 4px}
+    .legal h2 {font-size:20px;line-height:28px;font-weight:600;margin:24px 0 8px}
+    .legal p, .legal li {font-size:16px;line-height:24px;color:rgb(var(--fg))}
+    .legal ul {list-style:disc;padding-inline-start:24px;margin:8px 0}
+    .legal .upd {font-size:14px;color:rgb(var(--muted))}
+    .legal a {color:rgb(var(--accent))}
+  </style>
+</head>
+<body class="min-h-screen bg-ground text-fg" style="font-family:ui-rounded,system-ui,sans-serif">
+  <main class="legal">
+    <p><a href="/">Back to HomeClip</a></p>
+    <h1>Privacy Policy</h1>
+    <p class="upd">Last updated: October 2026</p>
+    <p>HomeClip is small on purpose. Here is everything it keeps.</p>
+
+    <h2>What is stored about you</h2>
+    <ul>
+      <li><strong>Your identity.</strong> Your Homeroom user id and username, attached to what you add and mark (dramas, episodes, follows, watched episodes, reports).</li>
+      <li><strong>Your watching.</strong> Which episodes you marked watched, and, when you play an episode in the app, your resume position so you can pick up where you left off.</li>
+      <li><strong>Usage events.</strong> Which screens open, when watching starts or completes, when a download starts or is deleted, and the language you chose. These are kept in the app's own database for the group to see how the app is used. They are never sold or sent to an ad network.</li>
+      <li><strong>Error reports.</strong> When something breaks in the page, the error message, a stack trace and the screen you were on, so it can be fixed. Rate limited, and never containing your posts or marks.</li>
+    </ul>
+
+    <h2>What is stored on your device only</h2>
+    <ul>
+      <li><strong>Caches.</strong> The last feed or drama you opened, so the app can show it with no connection.</li>
+      <li><strong>Downloads.</strong> A saved episode's video and subtitles live in your browser's IndexedDB on your device. They never reach HomeClip's servers.</li>
+      <li><strong>Preferences.</strong> Your language, caption size and background, and picture quality.</li>
+      <li>Clearing the app's site data in your browser removes all of the above.</li>
+    </ul>
+
+    <h2>What is never collected</h2>
+    <ul>
+      <li>No advertising identifiers, no third-party analytics, no ad network requests.</li>
+      <li>No payment data. VIP access is not connected to payments yet.</li>
+      <li>Video and subtitle links you add are stored as links only; the videos themselves are fetched from their own source straight to your browser.</li>
+    </ul>
+
+    <h2>Who can see what</h2>
+    <p>The dramas and episodes are shared with your homeroom. What you personally marked watched, your resume positions, your downloads and your reports are yours; they are not shown to other members.</p>
+
+    <h2>Contact</h2>
+    <p>Questions about privacy: <a href="mailto:[contact email]">[contact email]</a>.</p>
+  </main>
+</body>
+</html>

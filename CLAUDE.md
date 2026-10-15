@@ -128,8 +128,11 @@ or licensed video is used (see `data/catalog.js`).
 The app also carries a smaller feature from main: a shared drama tracker at
 `/tracker`. The group adds serial dramas season by season and episode by
 episode; each person follows the shows they like, marks episodes watched and
-sees which episode comes next. It plays no video itself: an episode can carry
-a link to wherever it is watched, which Watch opens in a new tab. It is
+sees which episode comes next. An episode can carry
+a link to wherever it is watched, which Watch opens in a new tab, or a video
+link that plays inside the tracker's own player (resume, skip intro, captions,
+quality, next-episode countdown); VIP members can save an episode for offline
+viewing, with nothing stored server-side. It is
 separate from the streaming catalog above: its own tables (`tracker_*`), API
 (`/api/tracker/*`), page (`public/tracker.html`, `public/app.js`,
 `public/screens.css`) and hash routing.
@@ -176,7 +179,7 @@ keeping every text pair at 4.5:1 or more in both looks.
 
 ## App-specific conventions
 
-- **No new dependencies.** The frontend is vanilla ES modules in
+- **No new dependencies** (hls.js, for the tracker player, is the one exception). The frontend is vanilla ES modules in
   `public/js/` with path-based routing in `router.js` (History API);
   styling is precompiled Tailwind only. No framework, no runtime CSS.
 - **Generated art is served outside `/api/`.** `<img>` and `<track>`
@@ -235,3 +238,34 @@ keeping every text pair at 4.5:1 or more in both looks.
   Top 10, one row per genre) are built server-side in `/api/tracker/feed`
   from whatever dramas the route can see. Trending orders by follow count;
   the sample dramas' seeded follows (Priya, Sam, Jun) are its demo signal.
+- **Tracker player, downloads and offline** (all tracker-side, none of it touches
+  the streaming catalog). `public/tracker.html` is one page with four views
+  (`#view-home`, `#view-drama`, `#view-watch`, `#view-downloads`) routed by
+  `public/app.js` on the hash (`#/drama/:id`, ...) and on the path under
+  `/tracker` (`/tracker/drama/:id`, `/tracker/watch/:id`, `/tracker/downloads`,
+  `/tracker/vip/...`); `server.js` serves the drama and watch paths with
+  per-request meta (Open Graph, JSON-LD) injected into `tracker.html`. The watch
+  and downloads logic lives in `public/watch.js` and `public/downloads.js`,
+  loaded only when those views open; hls.js (accepted exception to "no new
+  dependencies", for `.m3u8` only) is served at `/vendor/hls.min.js`. An
+  episode's `media_url` plays in the in-app player; `watch_url` still opens in a
+  new tab. Demo episode 9000012 (Harbour Lights S2E6) carries an HLS test stream
+  and the fake captions in `public/demo/demo-subs.vtt`; 9000063 (Copper Hill
+  S2E14) carries the small VP9 WebM `public/demo/demo-video.webm` (Big Buck
+  Bunny, CC BY, Blender Foundation). `?demo=1` makes the viewing account VIP in
+  memory only so Downloads can be tried.
+- **Tracker private tables** also include `playback`, `events` and
+  `client_errors` (marked `staging:private`); `playback` references
+  `tracker_episodes`. Tracker analytics is first-party only: whitelisted event
+  names server-side, batched client-side, no third-party analytics.
+- **Tracker i18n and offline:** all tracker words live in `public/i18n.js`
+  (7 locales; server responses carry numbers and names, never sentence words).
+  The service worker `public/sw.js` is registered with scope `/tracker`,
+  precaches the tracker shell only and never serves `/api/*`. Cached reads and
+  the write queue live in localStorage (`hc-cache:<userId>...`,
+  `hc-queue:<userId>`), downloads in IndexedDB (`hc-downloads:<userId>`).
+- **Tracker API routes added with the player** (`/api/tracker/watch/:episodeId`,
+  `/episodes/:id/progress`, `/subscription`, `/events`) sit on the tracker
+  router; `/api/client-errors` and `/api/webhooks/stripe` stay on `app`.
+- Legal pages live at `/terms`, `/privacy`, `/copyright` (static under
+  `public/legal/`); `/robots.txt` and `/sitemap.xml` list the tracker dramas.

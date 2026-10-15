@@ -1,5 +1,6 @@
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
 const { DRAMAS, episodesFor, VIDEO_BASE, VIDEO_POOL } = require('./data/catalog');
@@ -32,10 +33,14 @@ const GUEST_PUBLIC_KEY = (process.env.USERNODE_GUEST_JWT_PUBLIC_KEY || '')
 
 // Paths that stay open without authentication. Add a path here (and add it
 // with `app.get`/`app.post` below) if you deliberately want it public.
-// Everything else requires a valid platform-issued JWT. The Stripe webhook
-// is called by Stripe's servers, which carry no platform token; it is
-// authenticated by its own HMAC signature instead (see the route below).
-const PUBLIC_API_PATHS = new Set(['/health', '/api/webhooks/stripe']);
+// Everything else requires a valid platform-issued JWT.
+// /api/subscription is a GET whose answer for anyone without an account is
+// the constant free shape, so opening it to signed-out visitors (the page
+// asks for it on every boot, and a 401 would log a console error) carries
+// no data. The Stripe webhook is called by Stripe's servers, which carry no
+// platform token; it is authenticated by its own HMAC signature instead
+// (see the route below).
+const PUBLIC_API_PATHS = new Set(['/health', '/api/subscription', '/api/webhooks/stripe']);
 
 // Keep the raw request body alongside the parsed one: Stripe webhook
 // signatures are computed over the exact bytes on the wire, so re-serialising
@@ -729,6 +734,8 @@ function gateEpisode(e, vip) {
     locked,
     requiresAd: access === 'ads' && !vip,
     watch_url: locked ? null : (e.watch_url || null),
+    // The video link is as locked as the watch link.
+    media_url: locked ? null : (e.media_url || null),
   };
 }
 
@@ -966,6 +973,153 @@ app.post('/api/webhooks/stripe', h(async (req, res) => {
   res.json({ received: true });
 }));
 
+
+// ── HTML entry points with per-request meta ───────────────────────────────
+// The plain tracker shell (/tracker) is served by the catch-all below, with
+// its default title and description. These paths serve the SAME shell with the
+// meta block (title, description, Open Graph, Twitter card, JSON-LD,
+// canonical) injected per request, so a drama or an episode pasted into a
+// chat or found by a search engine describes itself. Canonical and share
+// URLs are built from the request's own host and forwarded scheme: no
+// hostname is ever written into this file.
+const SHELL_PATH = path.join(__dirname, 'public', 'tracker.html');
+const SHELL_DEFAULT_TITLE = '<title>HomeClip drama tracker</title>';
+const META_SLOT = '<!--META-->';
+
+let shellHtml = null;
+function readShell() {
+  if (shellHtml === null) shellHtml = fs.readFileSync(SHELL_PATH, 'utf8');
+  return shellHtml;
+}
+
+function escapeAttr(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+// The origin this request came in on, from the forwarded headers the
+// platform's edge sets (the app itself is plain http behind it).
+function requestOrigin(req) {
+  const proto = req.headers['x-forwarded-proto'] === 'https' || req.socket.encrypted
+    ? 'https' : 'http';
+  const host = req.headers.host || 'localhost:' + port;
+  return proto + '://' + host;
+}
+
+function metaBlock(title, description, ogType, jsonLd) {
+  return (
+    '<meta name="description" content="' + escapeAttr(description) + '">' +
+    '<meta property="og:title" content="' + escapeAttr(title) + '">' +
+    '<meta property="og:description" content="' + escapeAttr(description) + '">' +
+    '<meta property="og:type" content="' + escapeAttr(ogType) + '">' +
+    '<meta name="twitter:card" content="summary">' +
+    (jsonLd ? '<script type="application/ld+json">' + jsonLd + '</script>' : '')
+  );
+}
+
+// Replaces the slot and the default title in one shell copy; the canonical
+// and og:url lines are appended by the caller, which knows the path.
+function serveShell(req, res, title, description, ogType, jsonLd, canonicalPath) {
+  const origin = requestOrigin(req);
+  const meta = metaBlock(title, description, ogType, jsonLd) +
+    '<meta property="og:url" content="' + escapeAttr(origin + canonicalPath) + '">' +
+    '<link rel="canonical" href="' + escapeAttr(origin + canonicalPath) + '">';
+  const html = readShell()
+    .replace(META_SLOT, meta)
+    .replace(SHELL_DEFAULT_TITLE, '<title>' + escapeAttr(title) + '</title>');
+  res.set('Cache-Control', 'no-store');
+  res.type('html').send(html);
+}
+
+// Drama or episode lookup for the meta block; demo rows answer only on
+// ?demo=1 (staging), like every other route.
+async function metaFor(req, kind) {
+  const demo = demoOn(req);
+  const id = req.params.id;
+  const params = [id, demo];
+  const rows = await pool.query(
+    kind === 'drama'
+      ? `SELECT id, title, synopsis FROM tracker_dramas WHERE id = $1 AND ($2 OR NOT is_demo)`
+      : `SELECT e.id, e.title, e.season, e.number, d.id AS drama_id, d.title AS drama_title, d.synopsis
+           FROM tracker_episodes e JOIN tracker_dramas d ON d.id = e.drama_id
+          WHERE e.id = $1 AND ($2 OR NOT e.is_demo)`,
+    params
+  );
+  return rows.rows[0] || null;
+}
+
+app.get('/tracker/drama/:id', async (req, res) => {
+  try {
+    const d = await metaFor(req, 'drama');
+    if (!d) return res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><title>HomeClip</title><p>Drama not found</p>');
+    const title = d.title + ' — HomeClip';
+    const jsonLd = JSON.stringify({
+      '@context': 'https://schema.org', '@type': 'TVSeries',
+      name: d.title, description: d.synopsis || undefined,
+    });
+    return serveShell(req, res, title, d.synopsis || 'Watch ' + d.title + ' with your group on HomeClip',
+      'video.tv_show', jsonLd, '/tracker/drama/' + d.id);
+  } catch (err) { console.error(err); return res.sendStatus(500); }
+});
+
+app.get('/tracker/watch/:id', async (req, res) => {
+  try {
+    const e = await metaFor(req, 'episode');
+    if (!e) return res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><title>HomeClip</title><p>Episode not found</p>');
+    const title = e.drama_title + ', Season ' + e.season + ', Episode ' + e.number + ': ' + e.title + ' — HomeClip';
+    const jsonLd = JSON.stringify({
+      '@context': 'https://schema.org', '@type': 'TVEpisode',
+      name: e.title, partOfSeries: { '@type': 'TVSeries', name: e.drama_title },
+      partOfSeason: { '@type': 'TVSeason', seasonNumber: e.season },
+      episodeNumber: e.number,
+    });
+    return serveShell(req, res, title, e.synopsis || ('Watch ' + e.title + ' with your group on HomeClip'),
+      'video.episode', jsonLd, '/tracker/watch/' + e.id);
+  } catch (err) { console.error(err); return res.sendStatus(500); }
+});
+
+// The legal pages as clean paths; the files themselves are static under
+// /legal/ so guests and crawlers reach them without any redirect dance
+// beyond this one hop.
+app.get(['/terms', '/privacy', '/copyright'], (req, res) => {
+  const page = req.path === '/terms' ? 'terms' : req.path === '/privacy' ? 'privacy' : 'copyright';
+  return res.redirect(302, '/legal/' + page + '.html');
+});
+
+// Sitemap and robots policy, with absolute URLs built from the request's
+// own host (a sitemap's URLs must be absolute, so this one cannot be a
+// static file without baking a hostname in).
+app.get('/robots.txt', (req, res) => {
+  res.type('text/plain').send(
+    'User-agent: *\nAllow: /\n\nSitemap: ' + requestOrigin(req) + '/sitemap.xml\n'
+  );
+});
+
+app.get('/sitemap.xml', async (req, res) => {
+  try {
+    const rows = await pool.query(
+      `SELECT id FROM tracker_dramas WHERE NOT is_demo ORDER BY id`);
+    const origin = requestOrigin(req);
+    const body = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+      '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' +
+      '<url><loc>' + origin + '/</loc></url>\n' +
+      rows.rows.map(r => '<url><loc>' + origin + '/tracker/drama/' + r.id + '</loc></url>').join('\n') +
+      '\n</urlset>\n';
+    res.type('application/xml').send(body);
+  } catch (err) { console.error(err); return res.sendStatus(500); }
+});
+
+// hls.js, served straight from node_modules (its one new dependency, only
+// ever loaded by the watch screen).
+app.get('/vendor/hls.min.js', (_req, res) => {
+  const p = path.join(__dirname, 'node_modules', 'hls.js', 'dist', 'hls.min.js');
+  if (!fs.existsSync(p)) return res.sendStatus(404);
+  res.set('Cache-Control', 'public, max-age=86400');
+  return res.sendFile(p);
+});
+
+
 // ── Schema ────────────────────────────────────────────────────────────────
 // Idempotent on boot. `dramas` and `episodes` are public (the group's shared
 // feed); `follows`, `watches` and `reports` are each person's own data,
@@ -1034,6 +1188,47 @@ async function ensureTrackerSchema() {
       reason TEXT CHECK (reason IS NULL OR length(reason) <= 500),
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
+  // Phase 5: where an episode's video lives, and its subtitles. Columns are
+  // also added for databases created before they existed; the https check
+  // lives in the API layer, which validates every write.
+  await pool.query(`ALTER TABLE tracker_episodes ADD COLUMN IF NOT EXISTS media_url TEXT`);
+  await pool.query(`ALTER TABLE tracker_episodes ADD COLUMN IF NOT EXISTS subtitle_url TEXT`);
+
+  // Where the viewer stopped in an episode (the player reports it).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS playback (
+      user_id BIGINT NOT NULL,
+      episode_id BIGINT NOT NULL REFERENCES tracker_episodes(id) ON DELETE CASCADE,
+      position_s INT NOT NULL DEFAULT 0,
+      duration_s INT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (user_id, episode_id)
+    )`);
+  // First-party analytics events (views, watch time, drop-off, …).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS events (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT,
+      username TEXT,
+      name TEXT NOT NULL,
+      props JSONB,
+      path TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS events_name_created_idx ON events (name, created_at)`);
+  // Errors the page caught, for monitoring.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS client_errors (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT,
+      username TEXT,
+      message TEXT NOT NULL,
+      stack TEXT,
+      path TEXT,
+      user_agent TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
+
   // Phase 4a: comments (one level of replies), their likes, and drama
   // reviews. Each stores one person's own content, so each is
   // staging:private like follows/watches/reports. They reference only the
@@ -1081,6 +1276,9 @@ async function ensureTrackerSchema() {
   await pool.query(`COMMENT ON TABLE tracker_follows IS 'staging:private'`);
   await pool.query(`COMMENT ON TABLE tracker_watches IS 'staging:private'`);
   await pool.query(`COMMENT ON TABLE tracker_reports IS 'staging:private'`);
+  await pool.query(`COMMENT ON TABLE playback IS 'staging:private'`);
+  await pool.query(`COMMENT ON TABLE events IS 'staging:private'`);
+  await pool.query(`COMMENT ON TABLE client_errors IS 'staging:private'`);
   await pool.query(`COMMENT ON TABLE comments IS 'staging:private'`);
   await pool.query(`COMMENT ON TABLE comment_likes IS 'staging:private'`);
   await pool.query(`COMMENT ON TABLE reviews IS 'staging:private'`);
@@ -1242,6 +1440,22 @@ async function seedTrackerDemo() {
     }
     n++;
   }
+  // Sample video for the player, on two demo episodes only (the plain route
+  // leaves is_demo rows out anyway). One is a real HLS test stream, the
+  // other a small VP9 WebM served by the app itself: headless browsers that
+  // ship no H.264 decoder (the check runner included) can still show real
+  // playback, and being same-origin, Downloads work on it with no CORS
+  // setup. The clip is Big Buck Bunny (CC BY, Blender Foundation), from
+  // test-videos.co.uk.
+  await pool.query(
+    `UPDATE tracker_episodes SET media_url = 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+        subtitle_url = '/demo/demo-subs.vtt'
+      WHERE id = 9000012` // Harbour Lights, Season 2 Episode 6 "The Tide Table"
+  );
+  await pool.query(
+    `UPDATE tracker_episodes SET media_url = '/demo/demo-video.webm'
+      WHERE id = 9000063` // Copper Hill, Season 2 Episode 14 "The Last Shift"
+  );
   // Access levels for the demo episodes: Harbour Lights season 2 mixes VIP
   // and ad episodes, The Quiet Wing is all VIP, Meridian Court has ads.
   await pool.query(`UPDATE tracker_episodes SET access = 'vip' WHERE is_demo AND (
@@ -1469,6 +1683,8 @@ async function seedSampleDramas() {
 // Harbour Lights and The Quiet Wing, has watched Harbour Lights season 2 up
 // to episode 5, and all of Copper Hill. Idempotent: a reload changes
 // nothing, and what the viewer does to them stays.
+const demoSeedPending = new Map();
+
 async function seedDemoViewer(user) {
   // Follow times are set so Harbour Lights sorts before The Quiet Wing in
   // Next to watch (its latest watch is the most recent of the two).
@@ -1572,7 +1788,7 @@ async function nextToWatch(userId, demo) {
   );
   for (const row of res.rows) {
     const un = await pool.query(
-      `SELECT id, season, number, title, minutes, watch_url, access
+      `SELECT id, season, number, title, minutes, watch_url, media_url, access
          FROM tracker_episodes
         WHERE drama_id = $1 AND ($3 OR NOT is_demo) AND NOT EXISTS (
           SELECT 1 FROM tracker_watches WHERE user_id = $2 AND episode_id = tracker_episodes.id)
@@ -1582,7 +1798,7 @@ async function nextToWatch(userId, demo) {
     if (!un.rows.length) continue;
     const hero = un.rows[0];
     const later = await pool.query(
-      `SELECT id, season, number, title, minutes, watch_url, access
+      `SELECT id, season, number, title, minutes, watch_url, media_url, access
          FROM tracker_episodes
         WHERE drama_id = $1 AND season = $2 AND number > $3 AND ($5 OR NOT is_demo)
           AND NOT EXISTS (SELECT 1 FROM tracker_watches WHERE user_id = $4 AND episode_id = tracker_episodes.id)
@@ -1603,7 +1819,18 @@ tracker.use(async (req, res, next) => {
       const has = await pool.query(
         `SELECT 1 FROM tracker_follows WHERE user_id = $1 AND drama_id = 900001`, [req.user.id]
       );
-      if (!has.rows.length) await seedDemoViewer(req.user);
+      if (!has.rows.length) {
+        // The page fires /api/me and /api/feed in parallel; both would pass
+        // the check above and one could read while the other's writes are
+        // still landing. Share one seed per user instead.
+        let pending = demoSeedPending.get(req.user.id);
+        if (!pending) {
+          pending = seedDemoViewer(req.user)
+            .finally(() => demoSeedPending.delete(req.user.id));
+          demoSeedPending.set(req.user.id, pending);
+        }
+        await pending;
+      }
     }
   } catch (err) {
     console.error('demo viewer seed failed', err);
@@ -1706,7 +1933,8 @@ tracker.get('/feed', async (req, res) => {
                 EXISTS (SELECT 1 FROM tracker_watches w WHERE w.episode_id = e.id AND w.user_id = $3) AS viewer_watched,
                 (e.created_at > now() - interval '7 days') AS is_new
            FROM tracker_episodes e
-          WHERE ${demoClause(req, 'e.is_demo', 1)} AND e.drama_id = ANY($2)`,
+          WHERE ${demoClause(req, 'e.is_demo', 1)} AND e.drama_id = ANY($2)
+          ORDER BY e.season, e.number`,
         [...demoParams(req), ids, viewerId || 0]
       );
     }
@@ -1733,24 +1961,24 @@ tracker.get('/feed', async (req, res) => {
       const finished = Number(c.episodes) > 0 && watchedEps.length === dramaEps.length;
       // The one note, in priority order: your progress through the season
       // you are on (shown as its bar), a new episode this week you have not
-      // watched, that you finished it, or who else has watched it.
+      // watched, that you finished it, or who else has watched it. The
+      // words live in the page's dictionary (i18n.js), so the note carries
+      // the numbers and names and the client composes the sentence.
       let note;
-      if (Number(c.episodes) === 0) note = { kind: 'none', text: 'No episodes yet' };
+      if (Number(c.episodes) === 0) note = { kind: 'no_episodes' };
       else if (followed.has(Number(d.id)) && seasonEps.length) {
-        note = { kind: 'progress', text: `${seasonWatched} of ${seasonEps.length} watched this season`, pct: seasonWatched / seasonEps.length };
+        note = { kind: 'progress', pct: seasonWatched / seasonEps.length, watched: seasonWatched, total: seasonEps.length };
       } else if (dramaEps.some(e => e.is_new && !e.viewer_watched)) {
-        note = { kind: 'new', text: 'New episode' };
+        note = { kind: 'new' };
       } else if (finished) {
-        note = { kind: 'finished', text: 'You finished it' };
+        note = { kind: 'finished' };
       } else {
         const names = dramaEps.flatMap(e => e.watchers)
           .filter(u => u !== viewerName)
-          .filter((u, i, a) => a.indexOf(u) === i).slice(0, 3);
+          .filter((u, i, a) => a.indexOf(u) === i);
         note = names.length
-          ? { kind: 'others', text: names.length === 1 ? `Watched by ${names[0]}`
-              : names.length === 2 ? `Watched by ${names[0]} and ${names[1]}`
-              : `Watched by ${names[0]}, ${names[1]} and ${names.length - 2} more` }
-          : { kind: 'none', text: '' };
+          ? { kind: 'others', names: names.slice(0, 2), more: Math.max(0, names.length - 2) }
+          : { kind: 'none' };
       }
       return {
         id: Number(d.id), title: d.title, synopsis: d.synopsis,
@@ -1919,7 +2147,8 @@ tracker.get('/dramas/:id', async (req, res) => {
     if (!d.rows.length) return res.status(404).json({ error: 'Drama not found' });
     const drama = d.rows[0];
     const eps = await pool.query(
-      `SELECT e.id, e.season, e.number, e.title, e.minutes, e.watch_url, e.access,
+      `SELECT e.id, e.season, e.number, e.title, e.minutes, e.watch_url,
+              e.media_url, e.subtitle_url, e.access,
               e.added_by_id, e.added_by_username,
               ARRAY(SELECT w.username FROM tracker_watches w WHERE w.episode_id = e.id
                     ORDER BY w.watched_at) AS watched_by,
@@ -2008,11 +2237,18 @@ tracker.post('/dramas/:id/episodes', async (req, res) => {
     const minutes = req.body.minutes ? parseInt(req.body.minutes, 10) : null;
     const watch_url = typeof req.body.watch_url === 'string' && req.body.watch_url.trim()
       ? req.body.watch_url.trim() : null;
+    const media_url = typeof req.body.media_url === 'string' && req.body.media_url.trim()
+      ? req.body.media_url.trim() : null;
+    const subtitle_url = typeof req.body.subtitle_url === 'string' && req.body.subtitle_url.trim()
+      ? req.body.subtitle_url.trim() : null;
     if (!season || season < 1 || season > 99) return res.status(400).json({ error: 'Season must be 1 to 99' });
     if (!number || number < 1 || number > 999) return res.status(400).json({ error: 'Episode number must be 1 to 999' });
     if (!title || title.length > 80) return res.status(400).json({ error: 'A title of 1 to 80 characters is required' });
     if (minutes !== null && (minutes < 1 || minutes > 600)) return res.status(400).json({ error: 'Minutes must be 1 to 600' });
     if (watch_url && !/^https:\/\//.test(watch_url)) return res.status(400).json({ error: 'The link must start with https://' });
+    if (media_url && !/^https:\/\//.test(media_url)) return res.status(400).json({ error: 'The video link must start with https://' });
+    if (subtitle_url && !/^https:\/\//.test(subtitle_url) && !/^\/[A-Za-z0-9._~-]+$/.test(subtitle_url))
+      return res.status(400).json({ error: 'The subtitles link must be an https:// link or a path in this app' });
     const access = typeof req.body.access === 'string' && req.body.access ? req.body.access : 'free';
     if (!['free', 'vip', 'ads'].includes(access)) return res.status(400).json({ error: 'Access must be Free, VIP or Free with ads' });
     const exists = await pool.query(
@@ -2021,9 +2257,9 @@ tracker.post('/dramas/:id/episodes', async (req, res) => {
     );
     if (exists.rows.length) return res.status(409).json({ error: 'That season and episode number already exists' });
     const r = await pool.query(
-      `INSERT INTO tracker_episodes (drama_id, season, number, title, minutes, watch_url, access, added_by_id, added_by_username)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [req.params.id, season, number, title, minutes, watch_url, access, req.user.id, req.user.username]
+      `INSERT INTO tracker_episodes (drama_id, season, number, title, minutes, watch_url, media_url, subtitle_url, access, added_by_id, added_by_username)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+      [req.params.id, season, number, title, minutes, watch_url, media_url, subtitle_url, access, req.user.id, req.user.username]
     );
     return res.status(201).json({ episode: r.rows[0] });
   } catch (err) {
@@ -2123,6 +2359,190 @@ tracker.post('/reports', async (req, res) => {
     console.error(err);
     return res.status(500).json({ error: 'Could not send the report' });
   }
+});
+
+// ── Player, subscriptions, analytics (Phase 5) ───────────────────────────
+
+// What the watch screen needs in one call: the episode with its media, its
+// drama, its neighbours in the same season (so the player can offer the
+// next one), the viewer's stored position, and whether they marked it.
+// Guests may watch read-only, like every GET.
+tracker.get('/watch/:episodeId', async (req, res) => {
+  try {
+    const viewerId = req.user ? req.user.id : null;
+    const demo = demoOn(req);
+    const e = await pool.query(
+      `SELECT e.id, e.drama_id, e.season, e.number, e.title, e.minutes, e.watch_url,
+              e.media_url, e.subtitle_url, e.access,
+              EXISTS (SELECT 1 FROM tracker_watches w WHERE w.episode_id = e.id AND w.user_id = $3::integer) AS viewer_watched
+         FROM tracker_episodes e
+        WHERE e.id = $1 AND ($2 OR NOT e.is_demo)`,
+      [req.params.episodeId, demo, viewerId || 0]
+    );
+    if (!e.rows.length) return res.status(404).json({ error: 'Episode not found' });
+    // A locked VIP episode arrives without its watch and video links.
+    const ep = gateEpisode(e.rows[0], await viewerIsVip(req));
+    const d = await pool.query(
+      `SELECT id, title FROM tracker_dramas WHERE id = $1 AND ($2 OR NOT is_demo)`,
+      [ep.drama_id, demo]
+    );
+    if (!d.rows.length) return res.status(404).json({ error: 'Episode not found' });
+    const neighbours = await pool.query(
+      `SELECT e.id, e.season, e.number, e.title, e.minutes, (e.media_url IS NOT NULL) AS has_media
+         FROM tracker_episodes e
+        WHERE e.drama_id = $1 AND e.season = $2 AND ($3 OR NOT e.is_demo)
+        ORDER BY e.number`,
+      [ep.drama_id, ep.season, demo]
+    );
+    let prev = null, next = null;
+    for (const row of neighbours.rows) {
+      if (row.number < ep.number && (!prev || row.number > prev.number)) prev = row;
+      if (row.number > ep.number && (!next || row.number < next.number)) next = row;
+    }
+    let playback = null;
+    if (viewerId) {
+      const p = await pool.query(
+        `SELECT position_s, duration_s FROM playback WHERE user_id = $1 AND episode_id = $2`,
+        [viewerId, ep.id]
+      );
+      if (p.rows.length) playback = p.rows[0];
+    }
+    return res.json({
+      episode: {
+        id: Number(ep.id), drama_id: Number(ep.drama_id), season: ep.season,
+        number: ep.number, title: ep.title, minutes: ep.minutes,
+        watch_url: ep.watch_url, media_url: ep.media_url, subtitle_url: ep.subtitle_url,
+        access: ep.access, locked: ep.locked, requiresAd: ep.requiresAd,
+        viewer_watched: !!ep.viewer_watched,
+      },
+      drama: { id: Number(d.rows[0].id), title: d.rows[0].title },
+      prev: prev ? { id: Number(prev.id), number: prev.number, title: prev.title, has_media: !!prev.has_media } : null,
+      next: next ? { id: Number(next.id), number: next.number, title: next.title, minutes: next.minutes, has_media: !!next.has_media } : null,
+      playback,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Could not load the episode' });
+  }
+});
+
+// Where the viewer stopped. Called by the player as it plays.
+tracker.put('/episodes/:id/progress', async (req, res) => {
+  try {
+    const exists = await pool.query(`SELECT id FROM tracker_episodes WHERE id = $1`, [req.params.id]);
+    if (!exists.rows.length) return res.status(404).json({ error: 'Episode not found' });
+    const position = parseInt(req.body.position_s, 10);
+    const duration = req.body.duration_s ? parseInt(req.body.duration_s, 10) : null;
+    if (!Number.isFinite(position) || position < 0) return res.status(400).json({ error: 'A position in seconds is required' });
+    if (duration !== null && (duration < 1 || duration > 36000)) return res.status(400).json({ error: 'Duration must be 1 to 36000 seconds' });
+    const clamped = duration ? Math.min(position, duration) : Math.min(position, 36000);
+    await pool.query(
+      `INSERT INTO playback (user_id, episode_id, position_s, duration_s)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, episode_id)
+       DO UPDATE SET position_s = $3, duration_s = $4, updated_at = now()`,
+      [req.user.id, req.params.id, clamped, duration]
+    );
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Could not save the position' });
+  }
+});
+
+// Whether the viewer is VIP, for the player and the Downloads view: the same
+// answer as /api/me/subscription (vipStatus reads the subscriptions table
+// against req.now), in the shape those views read. On the staging demo
+// route, the demo viewer is VIP without storing anything (a row would leak
+// into the plain route on the same staging database, which must stay
+// production-shaped).
+//
+// The answer is always 200: a signed-out viewer and a viewer with no
+// subscription record both get the free shape, and an unexpected database
+// failure is logged here and answered as free too — the page must open
+// either way, and the client treats every non-VIP answer as free.
+const FREE_SUB = { vip: false, isVip: false, status: 'free', plan: null, expires_at: null };
+function demoVip(req) {
+  return IS_STAGING && req.query.demo === '1' && !!req.user;
+}
+async function viewerIsVip(req) {
+  if (demoVip(req)) return true;
+  return (await vipStatus(req)).vip;
+}
+tracker.get('/subscription', async (req, res) => {
+  try {
+    if (demoVip(req)) {
+      return res.json({ vip: true, isVip: true, plan: 'vip', status: 'active', expires_at: null, demo: true });
+    }
+    if (!req.user) return res.json(FREE_SUB);
+    const s = await vipStatus(req);
+    return res.json(s.vip
+      ? { vip: true, isVip: true, plan: s.row.plan_id, status: 'active', expires_at: s.row.renewal_date }
+      : FREE_SUB);
+  } catch (err) {
+    console.error('subscription lookup failed', err);
+    return res.json(FREE_SUB);
+  }
+});
+
+// First-party analytics. The event names are whitelisted server-side so a
+// stray client cannot invent schema; nothing here hides or shows anything.
+const EVENT_NAMES = new Set([
+  'screen_view', 'watch_started', 'watch_heartbeat', 'watch_completed', 'drop_off',
+  'download_started', 'download_completed', 'download_deleted',
+  'subscription_intent', 'language_changed', 'install_prompt_accepted',
+]);
+
+tracker.post('/events', async (req, res) => {
+  try {
+    const batch = Array.isArray(req.body.events) ? req.body.events : [];
+    if (!batch.length) return res.status(400).json({ error: 'An events array is required' });
+    if (batch.length > 50) return res.status(400).json({ error: 'At most 50 events per batch' });
+    const rows = [];
+    for (const ev of batch) {
+      const name = typeof ev.name === 'string' ? ev.name : '';
+      if (!EVENT_NAMES.has(name)) return res.status(400).json({ error: 'Unknown event name' });
+      rows.push([
+        req.user.id, req.user.username, name,
+        ev.props && typeof ev.props === 'object' ? JSON.stringify(ev.props) : null,
+        typeof ev.path === 'string' ? ev.path.slice(0, 200) : null,
+      ]);
+    }
+    const values = rows.map((_, i) =>
+      `($${i * 5 + 1}, $${i * 5 + 2}, $${i * 5 + 3}, $${i * 5 + 4}, $${i * 5 + 5})`).join(', ');
+    await pool.query(
+      `INSERT INTO events (user_id, username, name, props, path) VALUES ${values}`,
+      rows.flat()
+    );
+    return res.status(204).end();
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Could not record the events' });
+  }
+});
+
+// Errors the page caught. Rate limited in memory per user; stacks are
+// clipped so one bad page cannot fill the table.
+const errorBuckets = new Map(); // userId -> [timestamps]
+app.post('/api/client-errors', (req, res) => {
+  const userId = req.user ? req.user.id : 0;
+  const now = Date.now();
+  const bucket = (errorBuckets.get(userId) || []).filter(t => now - t < 60_000);
+  if (bucket.length >= 5) return res.status(429).json({ error: 'Too many error reports' });
+  bucket.push(now);
+  errorBuckets.set(userId, bucket);
+  const message = typeof req.body.message === 'string' ? req.body.message.slice(0, 500) : 'Unknown error';
+  const stack = typeof req.body.stack === 'string' ? req.body.stack.slice(0, 2000) : null;
+  const pathText = typeof req.body.path === 'string' ? req.body.path.slice(0, 200) : null;
+  pool.query(
+    `INSERT INTO client_errors (user_id, username, message, stack, path, user_agent)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [req.user ? req.user.id : null, req.user ? req.user.username : null,
+      message, stack, pathText, req.headers['user-agent'] || null]
+  ).then(() => res.status(204).end()).catch(err => {
+    console.error(err);
+    res.status(500).json({ error: 'Could not record the error' });
+  });
 });
 
 // ── Phase 4a: comments, likes, reviews ───────────────────────────────────

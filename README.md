@@ -24,6 +24,8 @@ Phase 1 covers the full loop with no sign-up friction and no payments:
   the viewer's Homeroom setting by default), notifications toggle,
   About.
 
+The group also keeps a shared **drama tracker** at `/tracker` (see below).
+
 ## Content
 
 All 30 dramas in `data/catalog.js` are invented for this app: original
@@ -57,8 +59,12 @@ follows the shows they like, marks episodes watched and sees which episode
 comes next ("Next to watch"). Anyone in the group can add a drama and
 episodes (season, number, title, optional length and link); the person who
 added something can remove it, and a drama or episode can be reported to the
-group's admins. The tracker plays no video: Watch marks an episode watched
-and opens its link, if it has one, in a new tab. It uses its own `tracker_*`
+group's admins. An episode with a video link plays in the tracker's own
+player (resume, skip intro, captions, quality, next-episode countdown); one
+with only an external link opens it in a new tab. VIP members can save an
+episode on their own device and watch it offline (nothing is stored
+server-side). The tracker is available in seven languages and its shell is
+installable. It uses its own `tracker_*`
 tables and `/api/tracker/*` routes. The staging preview opened with
 `/tracker?demo=1` shows five made-up dramas with their episodes, follows and
 watches.
@@ -91,3 +97,23 @@ The tracker at `/tracker` carries a VIP subscription (`#/vip`,
 Stripe test keys are declared in `dapp.json` and set through the
 platform's Secrets UI — never committed. Stripe returns the browser to
 `/tracker/vip/return`.
+
+## Development
+
+- `npm run build` compiles `styles/tailwind-input.css` (Tailwind, with the
+  app's colour tokens) to `public/tailwind.css`; the image build runs it on
+  every deploy.
+- `npm start` runs `server.js` (Express + Postgres). Schema is applied
+  idempotently on boot.
+- Secrets (Stripe test keys) are declared in `dapp.json` and set through
+  the platform's Secrets UI — never committed.
+
+To change the app, ask Homeroom bot (open the app on Homeroom, tap the
+Homeroom icon, then **Suggest an improvement**), or run Claude Code against
+this repo directly; `CLAUDE.md` carries the app-specific notes and points
+at the platform rules.
+
+The staging preview opened with `/tracker?demo=1` shows five made-up dramas
+with their episodes, follows and watches, two episodes playable in the player,
+and VIP enabled so Downloads can be tried. See `CLAUDE.md` for the app's
+design notes and its data model.
