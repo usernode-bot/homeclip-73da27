@@ -28,7 +28,7 @@ function skeletonList() {
 
 function posterThumb(d) {
   return '<span class="block h-20 w-14 shrink-0 overflow-hidden rounded-md border border-line bg-raised" style="aspect-ratio:2/3">' +
-    artImg(d.id, { cls: 'h-full w-full object-cover' }) + '</span>';
+    artImg(d, { cls: 'h-full w-full object-cover' }) + '</span>';
 }
 
 export async function render({ view, query }) {
@@ -79,7 +79,7 @@ export async function render({ view, query }) {
   function listRow(d) {
     const row = el(
       '<li><div class="list-row">' +
-        '<a class="flex min-w-0 flex-1 items-center gap-3" data-nav href="/drama/' + d.id + '">' +
+        '<a class="flex min-w-0 flex-1 items-center gap-3" data-nav href="/drama/' + d.id + demoParam + '">' +
           posterThumb(d) +
           '<span class="min-w-0"><span class="block truncate text-body font-medium text-fg">' + d.title + '</span>' +
           '<span class="block truncate text-small text-muted">' + d.year + ' · ' + d.genres.map(genreLabel).join(', ') + ' · ' + icon('star', 'h-3.5 w-3.5 inline align-text-bottom') + ' ' + d.rating.toFixed(1) + '</span></span>' +
@@ -100,12 +100,12 @@ export async function render({ view, query }) {
   function historyRow(d) {
     const row = el(
       '<li><div class="list-row">' +
-        '<a class="flex min-w-0 flex-1 items-center gap-3" data-nav href="/watch/' + d.id + '/' + d.ep + '">' +
+        '<a class="flex min-w-0 flex-1 items-center gap-3" data-nav href="/watch/' + d.id + '/' + d.ep + demoParam + '">' +
           posterThumb(d) +
           '<span class="min-w-0"><span class="block truncate text-body font-medium text-fg">' + d.title + '</span>' +
           '<span class="block truncate text-small text-muted">' + t('history.epShort', { n: d.ep }) + ' · ' + timeFmt(d.seconds) + '</span></span>' +
         '</a>' +
-        '<a class="btn-secondary min-h-9 px-3 text-small" data-nav href="/watch/' + d.id + '/' + d.ep + '">' + t('history.continue') + '</a>' +
+        '<a class="btn-secondary min-h-9 px-3 text-small" data-nav href="/watch/' + d.id + '/' + d.ep + demoParam + '">' + t('history.continue') + '</a>' +
         '<button type="button" class="hc-iconbtn text-muted" aria-label="' + t('history.remove') + '" data-remove>' + icon('trash') + '</button>' +
       '</div></li>'
     );

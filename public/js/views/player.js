@@ -20,9 +20,11 @@ export function unmount() {
   }
 }
 
-export async function render({ view, params }) {
+export async function render({ view, params, query }) {
   const dramaId = parseInt(params[0], 10);
   let ep = parseInt(params[1], 10);
+  // Demo rows (staging seed) need ?demo=1 forwarded to the API.
+  const demoQ = query.get('demo') === '1' ? '?demo=1' : '';
   if (cleanup) unmount(); // a previous player instance may still be wired
 
   view.innerHTML = '';
@@ -34,7 +36,7 @@ export async function render({ view, params }) {
 
   let data;
   try {
-    data = await api('/api/dramas/' + dramaId);
+    data = await api('/api/dramas/' + dramaId + demoQ);
   } catch (e) {
     view.innerHTML = '';
     if (e.status === 404) view.appendChild(emptyState(t('detail.notFound'), ''));
@@ -163,7 +165,7 @@ export async function render({ view, params }) {
     endedBox.classList.add('hidden');
     endedBox.classList.remove('flex');
     endedActions.innerHTML = '';
-    history.replaceState({}, '', '/watch/' + d.id + '/' + n);
+    history.replaceState({}, '', '/watch/' + d.id + '/' + n + demoQ);
     if (autoplay) play();
     setPausedUi(true);
     // A fresh episode starts with subtitles off.
