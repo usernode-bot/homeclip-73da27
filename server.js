@@ -313,6 +313,8 @@ CREATE TABLE IF NOT EXISTS episodes (
   video_url TEXT NOT NULL,
   PRIMARY KEY (drama_id, num)
 );
+ALTER TABLE episodes ADD COLUMN IF NOT EXISTS access TEXT NOT NULL DEFAULT 'free' CHECK (access IN ('free','vip'));
+ALTER TABLE episodes ADD COLUMN IF NOT EXISTS fallback_url TEXT;
 CREATE TABLE IF NOT EXISTS my_list (
   user_id INTEGER NOT NULL,
   drama_id INTEGER NOT NULL REFERENCES dramas(id) ON DELETE CASCADE,
@@ -394,11 +396,12 @@ async function seedCatalog() {
       );
       for (const ep of episodesFor(d)) {
         await client.query(
-          `INSERT INTO episodes (drama_id, num, duration_min, video_url)
-           VALUES ($1,$2,$3,$4)
+          `INSERT INTO episodes (drama_id, num, duration_min, video_url, access, fallback_url)
+           VALUES ($1,$2,$3,$4,$5,$6)
            ON CONFLICT (drama_id, num) DO UPDATE
-             SET duration_min = EXCLUDED.duration_min, video_url = EXCLUDED.video_url`,
-          [d.id, ep.num, ep.durationMin, ep.videoUrl]
+             SET duration_min = EXCLUDED.duration_min, video_url = EXCLUDED.video_url,
+                 access = EXCLUDED.access, fallback_url = EXCLUDED.fallback_url`,
+          [d.id, ep.num, ep.durationMin, ep.videoUrl, ep.access, ep.fallbackUrl]
         );
       }
     }
@@ -733,7 +736,7 @@ app.get('/api/dramas/:id', async (req, res) => {
   // Staging demo rows stay behind ?demo=1, like the list routes.
   if (d.rows[0].is_demo && !wantsDemo(req)) return res.status(404).json({ error: 'not_found' });
   const eps = await pool.query(
-    'SELECT num, duration_min, video_url FROM episodes WHERE drama_id = $1 ORDER BY num', [id]
+    'SELECT num, duration_min, video_url, access, fallback_url FROM episodes WHERE drama_id = $1 ORDER BY num', [id]
   );
   let inMyList = false;
   let progress = null;
@@ -746,7 +749,23 @@ app.get('/api/dramas/:id', async (req, res) => {
     );
     if (pr.rowCount > 0) progress = pr.rows[0];
   }
-  res.json({ drama: d.rows[0], episodes: eps.rows, inMyList, progress });
+  // VIP is decided here, server-side, against req.now — the same rule the
+  // tracker's gateEpisode() follows. A locked episode leaves WITHOUT its
+  // video_url and fallback_url, so no amount of client-side editing can
+  // unlock it; the player only ever sees the locked flag and the label.
+  const vip = await viewerIsVip(req);
+  const episodes = eps.rows.map((e) => {
+    const locked = e.access === 'vip' && !vip;
+    return {
+      num: e.num,
+      duration_min: e.duration_min,
+      access: e.access || 'free',
+      locked,
+      video_url: locked ? null : e.video_url,
+      fallback_url: locked ? null : e.fallback_url,
+    };
+  });
+  res.json({ drama: d.rows[0], episodes, inMyList, progress });
 });
 
 // Wrap an async handler so a rejected promise answers 500 JSON instead of
@@ -1192,16 +1211,17 @@ ${wedge(1)}${wedge(2)}${wedge(3)}${wedge(4)}
 function sampleVtt(lang) {
   const isId = lang === 'id';
   const lines = isId
-    ? ['[Contoh takarir HomeClip]', 'Video contoh ini tidak memiliki dialog asli.', 'Selamat menonton.']
-    : ['[HomeClip sample subtitles]', 'This sample video has no real dialogue.', 'Enjoy the show.'];
+    ? ['[Contoh takarir HomeClip]', 'Video contoh ini tidak memiliki dialog asli.', 'Selamat menonton.', 'Inilah akhir contoh.']
+    : ['[HomeClip sample subtitles]', 'This sample video has no real dialogue.', 'Enjoy the show.', 'This is the end of the sample.'];
+  // The committed clips run 30-60 s, so the cues now span the first 30 s
+  // (10 s each) instead of the old 5-second clip's whole length.
   let cues = 'WEBVTT\n';
-  let t = 1;
-  for (const line of lines) {
-    const a = `00:00:0${t}.000`;
-    const b = `00:00:0${t + 2}.000`;
-    cues += `\n${t}\n${a} --> ${b}\n${line}\n`;
-    t += 3;
-  }
+  lines.forEach((line, i) => {
+    const a = i * 10;
+    const b = a + 10;
+    const stamp = (sec) => `00:00:${String(sec).padStart(2, '0')}.000`;
+    cues += `\n${i + 1}\n${stamp(a)} --> ${stamp(b)}\n${line}\n`;
+  });
   return cues;
 }
 

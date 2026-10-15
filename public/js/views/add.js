@@ -5,7 +5,7 @@
 // uploaded through the platform's storage (the bridge) — only the
 // returned URL is kept, never the bytes.
 
-import { api, askForAccount } from '../api.js';
+import { api, askForAccount, getToken } from '../api.js';
 import { el, icon, toast } from '../ui.js';
 import { t } from '../i18n.js';
 import { store } from '../store.js';
@@ -169,8 +169,12 @@ export async function render({ view }) {
       toast(t('add.added'));
       done.innerHTML = '';
       // A full-page link: /tracker is the tracker page with its own
-      // hash router, not a catalog route.
-      const link = el('<a class="btn-secondary" href="/tracker#/drama/' + r.drama.id + '">' +
+      // hash router, not a catalog route. Carry the token in the query
+      // (before the hash) — that page reads it the same way this one
+      // was loaded.
+      const token = getToken();
+      const link = el('<a class="btn-secondary" href="/tracker' +
+        (token ? '?token=' + token : '') + '#/drama/' + r.drama.id + '">' +
         t('add.viewInTracker') + '</a>');
       done.appendChild(link);
       done.hidden = false;

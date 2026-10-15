@@ -22,6 +22,9 @@ export async function render({ view, params, query }) {
   const id = params[0];
   const wasOpen = synopsisOpen;
   synopsisOpen = false;
+  // A demo page load forwards demo=1, matching the player: staging can show
+  // the VIP episodes unlocked (server grants VIP in memory only).
+  const demoParam = query && query.get('demo') === '1' ? '?demo=1' : '';
   view.innerHTML = '';
   view.appendChild(skeletonDetail());
 
@@ -185,6 +188,11 @@ export async function render({ view, params, query }) {
   );
   const epList = epSection.querySelector('[data-episodes]');
   for (const epn of episodes) {
+    // VIP episodes carry the tracker's chip-vip marker so a person sees
+    // which ones need the plan before tapping in.
+    const tail = epn.access === 'vip'
+      ? '<span class="chip chip-vip">' + icon('lock', 'h-3.5 w-3.5') + 'VIP</span>'
+      : '<span class="text-muted">' + icon('play', 'h-4 w-4') + '</span>';
     const still = stillArt(d, epn.num, d.genres[0]);
     const row = el(
       '<li><a class="list-row" data-nav href="/watch/' + d.id + '/' + epn.num + demoQ + '">' +
@@ -200,7 +208,7 @@ export async function render({ view, params, query }) {
           (progress && progress.ep === epn.num ? ' · ' + timeFmt(progress.seconds) : '') +
           '</span>' +
         '</span>' +
-        '<span class="text-muted">' + icon('play', 'h-4 w-4') + '</span>' +
+        tail +
       '</a></li>'
     );
     epList.appendChild(row);

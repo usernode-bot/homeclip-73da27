@@ -198,7 +198,7 @@
     @apply h-full w-full object-cover;
   }
   .hc-banner .hc-banner-text {
-    @apply absolute inset-x-0 bottom-0 flex flex-col gap-1 p-4 text-white;
+    @apply absolute inset-x-0 bottom-0 flex flex-col gap-1 p-4 pr-16 text-white;
     /* Artwork sits under this scrim in both looks, so the label stays
        readable without following the theme's ground colour. */
     background: linear-gradient(to top, rgb(0 0 0 / 0.78), rgb(0 0 0 / 0.35) 55%, transparent);
@@ -295,6 +295,26 @@
   .hc-iconbtn {
     @apply inline-flex h-11 min-w-11 items-center justify-center rounded-lg text-fg
       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus;
+  }
+
+  /* Round play affordances: the banner's Play button (a real control, never
+     nested in the banner link) and the poster-card play badge. */
+  .hc-playfab {
+    @apply flex h-11 w-11 items-center justify-center rounded-full bg-accent text-on-accent
+      shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus;
+  }
+  .hc-playbadge {
+    @apply absolute bottom-1.5 right-1.5 z-10 flex h-11 w-11 items-center justify-center rounded-full
+      bg-accent text-on-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus;
+  }
+
+  /* Player buffering spinner (a trailing-arc ring, spins while waiting). */
+  @keyframes hc-spin {
+    to { transform: rotate(360deg); }
+  }
+  .hc-spinner {
+    @apply h-10 w-10 rounded-full border-2 border-white/30 border-t-white;
+    animation: hc-spin 1s linear infinite;
   }
 
   /* Segmented control (Language, Theme). */
