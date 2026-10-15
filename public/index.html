@@ -17,7 +17,6 @@
         if (v === null) return 'null';
         if (typeof v === 'string') return v;
         if (typeof v === 'number' || typeof v === 'boolean') return String(v);
-        if (typeof v === 'function') return '[Function ' + (v.name || 'anonymous') + ']';
         if (v instanceof Error) return (v.stack || (v.name + ': ' + v.message));
         if (depth > 3) return '[…]';
         var seen = new WeakSet();
@@ -26,8 +25,8 @@
             if (seen.has(val)) return '[Circular]';
             seen.add(val);
           }
-          if (typeof val === 'function') return '[Function ' + (val.name || 'anonymous') + ']';
-          if (val instanceof Error) return val.stack || (val.name + ': ' + val.message);
+          if (typeof val === 'function') return '[Function ' + (v.name || 'anonymous') + ']';
+          if (val instanceof Error) return val.stack || (v.name + ': ' + v.message);
           return val;
         });
       } catch (e) { try { return String(v); } catch (_) { return '[unserializable]'; } }
@@ -133,7 +132,7 @@
        every action. -->
   <div data-spec-screen="1" id="view-home">
     <div class="app">
-    <div class="top"><div class="brand"><svg style="color:rgb(var(--accent));width:24px;height:24px" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M9 21h6M12 17v4"/></svg>HomeClip</div><div class="top-actions"><button id="downloads-btn" class="icon-btn" data-i18n-aria="downloads" aria-label="Downloads"><svg viewBox="0 0 24 24"><path d="M12 4v10m0 0l-4-4m4 4l4-4M5 20h14"/></svg></button><button id="language-btn" class="icon-btn" data-i18n-aria="language" aria-label="Language"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 4 5.6 4 9s-1.5 6.4-4 9c-2.5-2.6-4-5.6-4-9s1.5-6.4 4-9z"/></svg></button><button id="add-drama-btn" class="btn-secondary" data-i18n="add_drama">Add drama</button></div></div>
+    <div class="top"><div class="brand"><svg style="color:rgb(var(--accent));width:24px;height:24px" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M9 21h6M12 17v4"/></svg>HomeClip</div><div class="top-actions"><a id="vip-button" href="#/vip" class="btn-secondary" style="text-decoration:none">VIP</a><button id="downloads-btn" class="icon-btn" data-i18n-aria="downloads" aria-label="Downloads"><svg viewBox="0 0 24 24"><path d="M12 4v10m0 0l-4-4m4 4l4-4M5 20h14"/></svg></button><button id="language-btn" class="icon-btn" data-i18n-aria="language" aria-label="Language"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 4 5.6 4 9s-1.5 6.4-4 9c-2.5-2.6-4-5.6-4-9s1.5-6.4 4-9z"/></svg></button><button id="add-drama-btn" class="btn-secondary" data-i18n="add_drama">Add drama</button></div></div>
     <div class="pad">
     <div id="home-state" hidden></div>
     <div id="next-section" hidden>
@@ -152,6 +151,10 @@
     </div>
     </div>
 
+    <!-- The browse rows (Trending Now, New Episodes, Top 10, and one row
+         per genre), filled by app.js from the feed's rows payload. -->
+    <div id="rows-section" hidden></div>
+
     <div class="section-label" id="feed-label">Drama feed</div>
     <ul class="list" id="feed-list"></ul>
     </div>
@@ -166,7 +169,7 @@
     <div class="pad">
     <div id="drama-state" hidden></div>
     <div id="drama-body">
-    <div class="head"><div class="poster" id="drama-poster"></div><div class="grow"><h1 class="title" id="drama-title"></h1><div class="sm muted" id="drama-desc"></div><div style="margin-top:8px"><button class="fol" id="drama-follow">Follow</button></div></div></div>
+    <div class="head"><div class="poster" id="drama-poster"></div><div class="grow"><h1 class="title" id="drama-title"></h1><div class="sm muted" id="drama-meta" hidden></div><div class="sm muted" id="drama-desc"></div><div class="sm muted" id="drama-cast" hidden></div><div class="head-actions"><button class="fol" id="drama-follow">Follow</button><button class="btn-secondary" id="share-drama-btn"><svg viewBox="0 0 24 24"><path d="M12 15V4M8 7l4-4 4 4"/><path d="M6 11H4v10h16V11h-2"/></svg>Share</button></div><div class="rating-line" id="drama-rating" hidden><svg class="star f" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/></svg><span id="rating-avg" style="font-weight:600"></span><span class="sm muted" id="rating-count"></span></div></div></div>
 
     <div class="section-label" data-i18n="seasons_label">Seasons</div>
     <div class="seg" id="season-seg"></div>
@@ -175,6 +178,10 @@
 
     <div class="section-label" data-i18n="episodes_label">Episodes</div>
     <ul class="list" id="ep-list"></ul>
+
+    <div class="rate-row"><div class="section-label">Reviews</div><button id="rate-btn" class="btn-secondary"><svg class="star f" viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/></svg>Rate</button></div>
+    <ul class="list" id="review-list"></ul>
+    <div class="more-row" id="review-more-row" hidden><button id="review-more" class="btn-secondary">Load more</button></div>
     <div class="foot"><button id="add-episode-btn" class="btn-secondary"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="add_episode">Add episode</span></button><button class="link" id="report-drama-btn"><svg viewBox="0 0 24 24"><path d="M5 21V4h11l-2 4 2 4H5"/></svg><span data-i18n="report">Report</span></button><button class="link" id="remove-drama-btn" hidden><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg><span data-i18n="remove">Remove</span></button></div>
     </div>
     </div>
@@ -234,10 +241,19 @@
     </div>
   </div>
 
+  <!-- VIP: plans, Manage subscription, Payment history and the return from
+       checkout, all drawn into #vip-body by app.js. -->
+  <div data-spec-screen="5" id="view-vip" hidden>
+    <div class="app">
+    <div class="top"><button class="icon-btn" id="vip-back" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><span class="brand" id="vip-title">HomeClip VIP</span><span class="w-11"></span></div>
+    <div class="pad" id="vip-body"></div>
+    </div>
+  </div>
+
   <!-- Sheets: Add drama, Add episode, episode details, Report, Language. -->
   <div id="sheet-backdrop" class="fixed inset-0 z-40 hidden bg-fg/40"></div>
   <div id="sheet-add-drama" role="dialog" aria-modal="true" aria-labelledby="add-drama-heading" class="sheet fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
-    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+    <div class="sheet-scroll rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
       <div class="mb-3 flex items-center justify-between gap-2">
         <button class="link" data-close data-i18n="cancel">Cancel</button>
         <h2 id="add-drama-heading" class="text-heading" data-i18n="add_drama_heading">Add drama</h2>
@@ -248,10 +264,31 @@
       <input id="drama-title-input" class="field" maxlength="80" data-i18n-ph="ph_title" placeholder="e.g. Harbour Lights" autocomplete="off">
       <label class="section-label" for="drama-desc-input" style="margin-top:12px" data-i18n="description_label">Description</label>
       <textarea id="drama-desc-input" class="field" maxlength="280" rows="3" data-i18n-ph="ph_desc" placeholder="A sentence or two about it, e.g. A ferry town keeps its secrets"></textarea>
+      <label class="section-label" for="drama-genres-input" style="margin-top:12px">Genres</label>
+      <input id="drama-genres-input" class="field" maxlength="180" placeholder="e.g. Romance, Comedy, comma separated" autocomplete="off">
+      <div class="flex gap-3" style="margin-top:12px">
+        <div class="grow">
+          <label class="section-label" for="drama-year-input">Year</label>
+          <input id="drama-year-input" class="field" type="number" min="1900" max="2100" placeholder="e.g. 2025" autocomplete="off">
+        </div>
+        <div class="grow">
+          <label class="section-label" for="drama-country-input">Country</label>
+          <input id="drama-country-input" class="field" maxlength="60" placeholder="e.g. Korea" autocomplete="off">
+        </div>
+      </div>
+      <label class="section-label" for="drama-rating-input" style="margin-top:12px">Rating out of 10 (optional)</label>
+      <input id="drama-rating-input" class="field" type="number" min="0" max="10" step="0.1" placeholder="e.g. 8.5" autocomplete="off">
+      <label class="section-label" for="drama-poster-input" style="margin-top:12px">Poster</label>
+      <div class="flex gap-2">
+        <input id="drama-poster-input" class="field grow" maxlength="500" placeholder="e.g. https://example.com/poster.jpg" autocomplete="off">
+        <button id="poster-upload-btn" class="btn-secondary" type="button">Upload</button>
+        <input id="poster-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" class="hidden">
+      </div>
+      <p class="sm muted" style="margin-top:4px">No poster is fine: HomeClip draws one.</p>
     </div>
   </div>
   <div id="sheet-add-episode" role="dialog" aria-modal="true" aria-labelledby="add-episode-heading" class="sheet fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
-    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+    <div class="sheet-scroll rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
       <div class="mb-3 flex items-center justify-between gap-2">
         <button class="link" data-close data-i18n="cancel">Cancel</button>
         <h2 id="add-episode-heading" class="text-heading" data-i18n="add_episode_heading">Add episode</h2>
@@ -278,6 +315,12 @@
       <input id="ep-media-input" class="field" maxlength="500" data-i18n-ph="ph_video_link" placeholder="e.g. https://example.com/episode.m3u8" autocomplete="off">
       <label class="section-label" for="ep-subtitle-input" style="margin-top:12px" data-i18n="subtitles_link_label">Subtitles link</label>
       <input id="ep-subtitle-input" class="field" maxlength="500" data-i18n-ph="ph_subtitles" placeholder="e.g. https://example.com/subs.vtt" autocomplete="off">
+      <label class="section-label" for="ep-access-input" style="margin-top:12px">Access</label>
+      <select id="ep-access-input" class="field">
+        <option value="free">Free</option>
+        <option value="vip">VIP</option>
+        <option value="ads">Free with ads</option>
+      </select>
     </div>
   </div>
   <div id="sheet-episode" role="dialog" aria-modal="true" aria-labelledby="episode-heading" class="sheet fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
@@ -290,11 +333,22 @@
       <h3 class="text-body font-semibold" id="episode-detail-title"></h3>
       <div class="sm muted mt-1" id="episode-detail-meta"></div>
       <div class="sm mt-1" id="episode-detail-watchers"></div>
+      <div class="mt-1" id="episode-detail-access"></div>
       <a id="episode-detail-link" class="link" target="_blank" rel="noopener" hidden>Open the link</a>
       <div class="foot">
+        <button id="share-episode-btn" class="btn-secondary"><svg viewBox="0 0 24 24"><path d="M12 15V4M8 7l4-4 4 4"/><path d="M6 11H4v10h16V11h-2"/></svg>Share</button>
         <button id="report-episode-btn" class="btn-secondary" data-i18n="report">Report</button>
         <button id="remove-episode-btn" class="btn-secondary" hidden data-i18n="remove">Remove</button>
       </div>
+      <div class="section-label" id="comments-label">Comments</div>
+      <div class="comment-replying" id="comment-replying" hidden>Replying to <span id="comment-replying-name" style="font-weight:600"></span><button class="link" id="cancel-reply">Cancel</button></div>
+      <div class="comment-composer">
+        <input id="comment-input" class="field" maxlength="500" placeholder="Say something about this episode, e.g. That twist">
+        <button id="post-comment" class="btn-primary">Post</button>
+      </div>
+      <p id="comment-error" class="mb-2 text-small" style="color:rgb(var(--danger))" hidden></p>
+      <ul class="comment-list" id="comment-list"></ul>
+      <div class="more-row" id="comment-more-row" hidden><button id="comment-more" class="btn-secondary">Load more</button></div>
     </div>
   </div>
   <div id="sheet-report" role="dialog" aria-modal="true" aria-labelledby="report-heading" class="sheet fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
@@ -318,6 +372,49 @@
         <span class="w-11"></span>
       </div>
       <div id="language-list"></div>
+    </div>
+  </div>
+
+  <div id="sheet-review" role="dialog" aria-modal="true" aria-labelledby="review-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
+    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <button class="link" data-close>Cancel</button>
+        <h2 id="review-heading" class="text-heading">Rate</h2>
+        <button id="save-review" class="btn-primary">Save review</button>
+      </div>
+      <p id="review-error" class="mb-2 text-small" style="color:rgb(var(--danger))" hidden></p>
+      <p class="sm muted mb-2" id="review-context"></p>
+      <div class="stars-input" id="review-stars" role="radiogroup" aria-label="Your rating from 1 to 5 stars"></div>
+      <label class="section-label" for="review-note-input" style="margin-top:12px">Note</label>
+      <textarea id="review-note-input" class="field" maxlength="280" rows="3" placeholder="What you thought, e.g. Best thing we have watched"></textarea>
+      <div class="foot"><button id="remove-review" class="link" hidden>Remove review</button></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden><span id="toast-text"></span></div>
+
+  <div id="sheet-paywall" role="dialog" aria-modal="true" aria-labelledby="paywall-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
+    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <button class="link" data-close>Not now</button>
+        <h2 id="paywall-heading" class="text-heading">VIP episode</h2>
+        <span class="w-11"></span>
+      </div>
+      <h3 class="text-body font-semibold">This episode is for VIP members</h3>
+      <p class="sm muted mt-1" id="paywall-detail"></p>
+      <p class="sm muted mt-1">From Rp 59.000, cancel any time.</p>
+      <div class="foot"><a href="#/vip" class="btn-primary" style="text-decoration:none">See VIP plans</a></div>
+    </div>
+  </div>
+  <div id="sheet-ad" role="dialog" aria-modal="true" aria-labelledby="ad-heading" class="fixed inset-x-0 bottom-0 z-50 mx-auto hidden w-full max-w-md">
+    <div class="rounded-t-2xl border border-b-0 border-line bg-surface p-4 pb-8">
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <span class="chip chip-soft">Sponsored</span>
+        <h2 id="ad-heading" class="text-heading">Ad</h2>
+        <span class="w-11"></span>
+      </div>
+      <div class="sm muted rounded-lg bg-raised p-4 text-center" style="height:120px;display:flex;align-items:center;justify-content:center">An ad would play here. Your episode starts in <b id="ad-count" class="mx-1">5</b>s</div>
+      <a href="#/vip" class="link">Go VIP to skip ads</a>
     </div>
   </div>
 

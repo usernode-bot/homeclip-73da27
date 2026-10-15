@@ -34,6 +34,43 @@ Anyone in the group can add to the feed; episodes are organised by season,
 then episode number. Watched status is tracked per person, and the group can
 see who has watched each episode — which is how people watch together.
 
+## VIP
+
+- **Plans** — Monthly (Rp 59.000), 3 Months (Rp 149.000) and Yearly
+  (Rp 499.000), billed in rupiah. Benefits: no ads, early access, HD/4K and
+  offline download.
+- **Checkout** — Stripe in sandbox (test) mode on Stripe's own hosted page;
+  no card numbers ever reach HomeClip. The provider structure is ready for
+  Midtrans and Xendit (Indonesian e-wallets, bank transfer) — see
+  `providers/`.
+- **Access levels** — each episode is Free, VIP or Free with ads, set when
+  the episode is added. A free user tapping a VIP episode gets the paywall
+  sheet; a Free-with-ads episode shows a short pre-roll ad placeholder
+  first. VIP members skip the ad and see every episode.
+- **Subscription state** — active, canceled (still VIP until the renewal
+  date) or expired, with the renewal date. Unlocking VIP content is
+  enforced on the server: a locked episode's payload omits its watch URL
+  and the watch endpoint refuses the write.
+- **Coupons** — a promo-code field on the VIP page; the server validates
+  the code and computes the discounted amount.
+- **Payment history** and **Manage subscription** pages — every charge with
+  its status, and cancel/resume for the subscription.
+
+## Development
+
+- `npm run build` compiles `styles/tailwind-input.css` (Tailwind, with the
+  app's colour tokens) to `public/tailwind.css`; the image build runs it on
+  every deploy.
+- `npm start` runs `server.js` (Express + Postgres). Schema is applied
+  idempotently on boot.
+- Secrets (Stripe test keys) are declared in `dapp.json` and set through
+  the platform's Secrets UI — never committed.
+
+To change the app, ask Homeroom bot (open the app on Homeroom, tap the
+Homeroom icon, then **Suggest an improvement**), or run Claude Code against
+this repo directly; `CLAUDE.md` carries the app-specific notes and points
+at the platform rules.
+
 The staging preview opened with `?demo=1` shows five made-up dramas with
 their episodes, follows and watches, two episodes playable in the player,
 and VIP enabled so Downloads can be tried. See `CLAUDE.md` for the app's
