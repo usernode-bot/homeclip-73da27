@@ -95,24 +95,37 @@ tables you've marked private), etc.
 
 ## About HomeClip
 
-Watch your homeroom's own serial drama together
-
-_(add a sentence or two more of product context here so Claude Code has a
-shared understanding of what this app is for)_
+Watch your homeroom's own serial drama together. The group adds the serial
+dramas it watches, season by season and episode by episode; each person
+follows the shows they like, marks episodes watched and sees which episode
+comes next. HomeClip plays no video itself: an episode can carry a link to
+wherever it is watched, which Watch opens in a new tab.
 
 ## Design
 
-This app's look. The first real version fills in the blanks; every later
-change follows it, and updates it when a request changes the look on purpose.
+The main screen's one job is to start the next episode, so its one filled
+button is Watch, in warm amber. The feed below is for browsing: Follow
+buttons stay outlined and quiet, and the posters and titles get the room. A
+drama's page is for reading its episode list; its only filled button is
+Watch, on the next episode.
 
-- **Palette:** _(name the accent, any second colour and the neutrals, e.g.
-  "accent: tomato red; second: basil green; neutrals: warm greys")_
-- **Signature element:** _(the one thing on screen drawn from this app's
-  subject, which no other app would have)_
-- **Type scale:** `text-title`, `text-heading`, `text-body`, `text-small`
-  _(change their sizes in `tailwind.config.js` if you must, not their number)_
-- **One fixed look:** _(only for an app drawn as its own scene, such as a
-  game: which look, and why. Otherwise delete this line.)_
+- **Palette:** warm greys and white for the page (ground, surface, raised,
+  line), deep teal as the accent (the TV screen, Following, the group's
+  notes, the `accent` token with `on-accent` on it), warm amber as the
+  action colour (the `action` token with `on-action` on it, and
+  `action-soft` for the "New episode" tint). Danger stays the kit's red.
+  Both looks follow the viewer's Homeroom theme; the token values live in
+  `styles/tailwind-input.css`.
+- **Signature element:** the TV. Next-to-watch and the upcoming episodes are
+  drawn as TV screens with a dark bezel and a small stand; the episode
+  numbers on a drama's page sit in small TV screens. Progress is always one
+  thin amber bar. Posters are flat colour tiles: each drama gets one of four
+  colours (teal, amber, ink, slate) in turn, so nobody has to upload
+  anything.
+- **Type scale:** `text-title` (28), `text-heading` (20), `text-body` (16),
+  `text-small` (14). The typeface is the system's rounded face
+  (`fontFamily` ui-rounded in `tailwind.config.js`), which feels friendly
+  like a living-room screen.
 
 The kit is in `styles/tailwind-input.css`: colour tokens with a light and
 a dark value (named in `tailwind.config.js`), and a few components
@@ -142,6 +155,15 @@ Re-theme by changing the token values there, keeping every text pair at
 
 ## App-specific conventions
 
-_(optional — e.g. "all currency values stored as integer cents, not
-floats"; "the `posts` table is append-only"; "avoid adding new
-dependencies"; etc.)_
+- **Private tables:** `follows`, `watches` and `reports` are marked
+  `staging:private` (each person's own data). `dramas` and `episodes` are
+  public: the group's shared feed.
+- **Demo data:** the five demo dramas and their episodes are seeded on boot
+  in staging with fixed ids and `is_demo = true`; every API response without
+  `?demo=1` leaves `is_demo` rows out, so the plain route stays
+  production-shaped. The viewing account's own follows and watches are
+  written once, on its first `?demo=1` request.
+- **Vocabulary:** drama, season, episode, Follow, Following, Watch,
+  watched, Next to watch, Continue this season, Drama feed, Add drama,
+  Add episode, Report, Remove. One idea, one word, everywhere.
+- Avoid adding new dependencies; the stack is Express, pg and Tailwind.

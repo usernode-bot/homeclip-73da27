@@ -1,27 +1,31 @@
 # HomeClip
 
-> **Starter template** — this repo was scaffolded by Homeroom Social
-> Vibecoding. Everything in it is placeholder example code until the
-> app's first real feature is built.
+Watch your homeroom's own serial drama together.
 
-The scaffold is a small working demo that proves the plumbing works:
+The group adds the serial dramas it watches, season by season and episode by
+episode. Each person follows the shows they like, marks episodes watched and
+sees which episode comes next — the main screen's one job is to start that
+next episode.
 
-- **Sign-in** — the server verifies the platform-issued user token
-  (an RS256 JWT) on every request, so the app already knows who is
-  using it. No accounts to build.
-- **Database** — the app has its own private Postgres database, ready
-  to store things.
-- **Styling** — Tailwind CSS, precompiled by `npm run build` during
-  image creation with either Kubernetes/Paketo or standalone Docker, in a
-  light and a dark look that follow the viewer's Homeroom theme.
+- **Drama feed** — every drama the group has added, newest first, each with a
+  note: your progress through the season you are on, "New episode" for one
+  added this week, who else has watched it, or "You finished it".
+- **Next to watch** — the first episode you have not watched in the show you
+  watched most recently, drawn as a TV screen with a thin amber bar for how
+  far through the season you are.
+- **Follow** — shows you follow make up "Next to watch".
+- **Watch** — marks an episode watched, and opens the episode's link (if
+  whoever added it gave one) in a new tab. HomeClip plays no video itself.
+- **Add and remove** — anyone in the group can add a drama and episodes
+  (season, number, title, optional length and link); the person who added
+  something can remove it.
+- **Report** — a drama or an episode can be reported to the group's admins
+  with an optional reason. Nothing is hidden automatically.
 
-## Replacing the template
+Anyone in the group can add to the feed; episodes are organised by season,
+then episode number. Watched status is tracked per person, and the group can
+see who has watched each episode — which is how people watch together.
 
-To change this app, ask Homeroom bot: open the app on Homeroom, tap the
-Homeroom icon in the header, then **Suggest an improvement**, and describe
-the app you want in plain English. The template will be replaced with your
-real app. You can also run
-Claude Code against this repo directly; start with `CLAUDE.md`, which
-carries the app-specific notes and points at the platform rules.
-
-Once the real app exists, rewrite this README to describe it.
+The staging preview opened with `?demo=1` shows five made-up dramas with
+their episodes, follows and watches. See `CLAUDE.md` for the app's design
+notes and its data model.
