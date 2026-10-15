@@ -161,6 +161,44 @@
     display: none;
   }
 
+  /* Carousel navigation: round translucent arrows over a drama row's edges.
+     The .hc-row stays the native scroll container; the buttons only scrollBy
+     it. Vertical centre matches the row's poster (w-28 → 168px tall →
+     5.25rem); a 44px button centred there never reaches the play badge in
+     the poster's corner. On hover devices the buttons appear on hover (or
+     keyboard focus); on touch they stay visible so the rows stay steppable
+     without a mouse. A disabled button is always hidden, whatever the media
+     query does around it. */
+  .hc-carousel {
+    @apply relative;
+  }
+  .hc-carousel-btn {
+    @apply absolute z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full
+      bg-black/60 text-white shadow-md transition duration-200
+      hover:bg-accent focus-visible:bg-accent focus-visible:outline-none
+      focus-visible:ring-2 focus-visible:ring-white motion-safe:active:scale-90;
+    top: 5.25rem;
+  }
+  .hc-carousel-btn-prev {
+    @apply -left-2;
+  }
+  .hc-carousel-btn-next {
+    @apply -right-2;
+  }
+  .hc-carousel-btn:disabled {
+    opacity: 0 !important;
+    @apply pointer-events-none;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .hc-carousel-btn:not(:disabled) {
+      @apply opacity-0;
+    }
+    .hc-carousel:hover .hc-carousel-btn:not(:disabled),
+    .hc-carousel:focus-within .hc-carousel-btn:not(:disabled) {
+      @apply opacity-100;
+    }
+  }
+
   /* Top 10 rank badge, drawn over a poster's corner. */
   .hc-rank {
     @apply absolute left-1.5 top-1.5 z-10 flex h-7 w-7 items-center justify-center rounded-full
