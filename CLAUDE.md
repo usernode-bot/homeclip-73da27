@@ -201,7 +201,11 @@ keeping every text pair at 4.5:1 or more in both looks.
 - **Drama tracker data:** `tracker_follows`, `tracker_watches` and
   `tracker_reports` are marked `staging:private` (each person's own data).
   `tracker_dramas` and `tracker_episodes` are public: the group's shared
-  feed. The five tracker demo dramas and their episodes are seeded on boot in
+  feed. These tables were named `dramas` / `episodes` / `follows` / `watches`
+  / `reports` before the streaming catalog arrived; `migrateLegacyTrackerTables`
+  (server.js) renames them on boot when a database still has them under the
+  old names, keeping the group's data and freeing the names for the catalog.
+  The five tracker demo dramas and their episodes are seeded on boot in
   staging with fixed ids and `is_demo = true`; every `/api/tracker/*` response
   without `?demo=1` leaves `is_demo` rows out. The viewing account's own
   follows and watches are written once, on its first `?demo=1` request.

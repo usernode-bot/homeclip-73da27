@@ -136,6 +136,57 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
 app.get('/favicon.ico', (_req, res) => res.status(204).end());
 
+// ── Legacy table rename (idempotent, applied before the schema) ───────────
+// Before the streaming catalog, the tracker's tables were named dramas /
+// episodes / follows / watches / reports. The catalog now owns the names
+// dramas and episodes, so on a database created before the rename the
+// tracker's tables are moved to their new names first. A rename keeps the
+// group's real tracker data (added dramas, follows, watches, reports) and
+// frees the names for the catalog's fresh tables; foreign keys follow a
+// rename, so comments, reviews, playback and tracker_reports keep pointing
+// at the right tables. Each rename runs only when the old table still
+// exists and the new one does not, and the old table is genuinely the
+// tracker's: the catalog later re-creates dramas and episodes under the old
+// names, so each of those pairs carries a signature column only the
+// catalog's table has (popularity on dramas, num on episodes). A table with
+// its signature is the catalog's, and the rename already ran.
+const LEGACY_TRACKER_TABLES = [
+  ['dramas', 'tracker_dramas', 'popularity'],
+  ['episodes', 'tracker_episodes', 'num'],
+  ['follows', 'tracker_follows', null],
+  ['watches', 'tracker_watches', null],
+  ['reports', 'tracker_reports', null],
+];
+
+async function tableExists(name) {
+  const r = await pool.query('SELECT to_regclass($1) IS NOT NULL AS yes', ['public.' + name]);
+  return r.rows[0].yes;
+}
+
+async function tableHasColumn(table, column) {
+  const r = await pool.query(
+    `SELECT 1 FROM information_schema.columns
+     WHERE table_name = $1 AND column_name = $2`, [table, column]);
+  return r.rowCount > 0;
+}
+
+async function migrateLegacyTrackerTables() {
+  for (const [oldName, newName, catalogColumn] of LEGACY_TRACKER_TABLES) {
+    if (!await tableExists(oldName)) continue;
+    if (catalogColumn && await tableHasColumn(oldName, catalogColumn)) {
+      // The catalog's own table, not a legacy one: the rename already ran.
+      continue;
+    }
+    if (await tableExists(newName)) {
+      console.error(`[boot] legacy table ${oldName} and ${newName} both exist; ` +
+        `leaving ${oldName} untouched`);
+      continue;
+    }
+    await pool.query(`ALTER TABLE ${oldName} RENAME TO ${newName}`);
+    console.log(`[boot] migrated legacy tracker table ${oldName} -> ${newName}`);
+  }
+}
+
 // ── Database schema (idempotent, applied on boot) ─────────────────────────
 // dramas/episodes are the shared SAMPLE CATALOG: public (it is the app's own
 // content, visible to everyone in the app anyway). my_list / watch_progress
@@ -2469,7 +2520,10 @@ async function viewerIsVip(req) {
   if (demoVip(req)) return true;
   return (await vipStatus(req)).vip;
 }
-tracker.get('/subscription', async (req, res) => {
+// The subscription answer, shared by /api/tracker/subscription and the
+// top-level /api/subscription: before the routes moved under /api/tracker,
+// the VIP page called /api/subscription at the top level.
+async function subscriptionAnswer(req, res) {
   try {
     if (demoVip(req)) {
       return res.json({ vip: true, isVip: true, plan: 'vip', status: 'active', expires_at: null, demo: true });
@@ -2483,7 +2537,11 @@ tracker.get('/subscription', async (req, res) => {
     console.error('subscription lookup failed', err);
     return res.json(FREE_SUB);
   }
-});
+}
+
+tracker.get('/subscription', subscriptionAnswer);
+// Same answer at the old top-level path, which is still a public GET.
+app.get('/api/subscription', subscriptionAnswer);
 
 // First-party analytics. The event names are whitelisted server-side so a
 // stray client cannot invent schema; nothing here hides or shows anything.
@@ -2910,6 +2968,7 @@ async function shutdown(signal) {
 }
 
 async function start() {
+  await migrateLegacyTrackerTables();
   await pool.query(SCHEMA_SQL);
   await seedCatalog();
   await ensureTrackerSchema();
