@@ -81,6 +81,9 @@
     { "name": "Feed empty state", "path": "/", "expectText": "No dramas yet" },
     { "id": "demo-feed", "name": "Populated demo", "path": "/?demo=1", "expectText": "The Tide Table", "visual": true, "impact": ["public/**", "styles/**"] },
     { "name": "Drama page", "path": "/?demo=1#/drama/900001", "expectText": "Season 2" },
+    { "id": "drama-reviews", "name": "Drama page with reviews", "path": "/?demo=1#/drama/900001", "expectText": "3 reviews", "visual": true, "impact": ["public/**", "styles/**", "server.js", "moderation.js"] },
+    { "id": "episode-comments", "name": "Episode sheet comments", "path": "/?demo=1#/drama/900001?ep=9000005", "expectText": "Comments", "visual": true, "impact": ["public/**", "styles/**", "server.js", "moderation.js"] },
+    { "id": "drama-no-reviews", "name": "Drama page without reviews", "path": "/?demo=1#/drama/900003", "expectText": "No reviews yet" },
     { "id": "vip.page", "name": "VIP page with IDR plans", "path": "/#/vip", "expectText": "Rp 59.000", "visual": true, "impact": ["public/**", "server.js", "styles/**", "providers/**"] },
     { "name": "Manage subscription renders", "path": "/#/vip/manage", "expectText": "Manage subscription" },
     { "name": "Payment history renders", "path": "/#/vip/payments", "expectText": "Payment history" }
