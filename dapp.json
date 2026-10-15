@@ -7,7 +7,58 @@
   "governance": {
     "preset": "you_or_the_group"
   },
-  "tests": [],
+  "tests": [
+    {
+      "id": "home.feed",
+      "name": "Home renders the drama feed",
+      "path": "/",
+      "expectText": "Staging demo: Harbour Lights"
+    },
+    {
+      "id": "home.detail",
+      "name": "Drama detail renders seasons and episodes",
+      "path": "/dramas/staging-demo-harbour-lights",
+      "expectText": "Season 1"
+    },
+    {
+      "id": "search.screen",
+      "name": "Search opens with its field",
+      "path": "/search",
+      "expectSelector": "input[data-search]"
+    },
+    {
+      "id": "search.results",
+      "name": "Search finds a seeded drama",
+      "path": "/search?q=harbour",
+      "expectText": "Staging demo: Harbour Lights"
+    },
+    {
+      "id": "player.screen",
+      "name": "Player opens a seeded episode",
+      "path": "/watch/900003",
+      "expectSelector": "video"
+    },
+    {
+      "id": "add.screen",
+      "name": "Add a drama form renders",
+      "path": "/add",
+      "expectText": "Add a drama"
+    },
+    {
+      "id": "phase2.profiles-and-continue",
+      "name": "Profiles, search and continue watching",
+      "path": "/profiles",
+      "expectSelector": "input[data-profile-id], [data-first], .avatar",
+      "visual": true,
+      "impact": [
+        "public/**",
+        "server.js",
+        "server/**",
+        "styles/**",
+        "dapp.json"
+      ]
+    }
+  ],
   "visibility": {
     "build": "public",
     "view": "public"

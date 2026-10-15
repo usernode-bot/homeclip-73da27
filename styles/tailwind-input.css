@@ -119,6 +119,20 @@
     @apply mb-2 px-1 text-small font-medium text-muted;
   }
 
+  /* A profile's avatar: a circle with the person's initial, or their
+     uploaded photo (an <img> fills it). .avatar-sm fits the header chip. */
+  .avatar {
+    @apply inline-flex h-14 w-14 items-center justify-center overflow-hidden rounded-full border border-line bg-raised text-heading;
+  }
+  .avatar-sm {
+    @apply h-8 w-8 text-small;
+  }
+
+  /* The header chip that opens Who's watching?: avatar plus name. */
+  .profile-chip {
+    @apply flex min-h-11 items-center gap-2 rounded-full border border-line bg-surface py-1 pl-1 pr-3;
+  }
+
   /* The states of anything that loads data. Show exactly one at a time:
      - loading: the content's own shape, never a blank: the same list and
        rows at their height, with .skeleton bars where their text goes, so

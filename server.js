@@ -2,10 +2,14 @@ const express = require('express');
 const path = require('path');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
+const { migrate } = require('./server/schema');
+const { seedIfStaging } = require('./server/seed');
+const registerApi = require('./server/api');
 
 const app = express();
 const port = process.env.PORT || 3000;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const IS_STAGING = process.env.USERNODE_ENV === 'staging';
 
 // The platform signs user-identity tokens with an RSA private key it never
 // shares. Containers get only the PUBLIC half, so this app can verify who a
@@ -89,7 +93,6 @@ app.get(/^\/usernode-(?:bridge|native|tailwind)\//, async (req, res) => {
 // page sends `usernode.now()` on as the `x-usernode-now` header. Only a
 // staging container reads either. See "Time-dependent features" in the
 // platform conventions.
-const IS_STAGING = process.env.USERNODE_ENV === 'staging';
 const PREVIEW_NOW = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
 function requestNow(req) {
   const raw = IS_STAGING ? (req.headers['x-usernode-now'] || req.query['un-now']) : null;
@@ -147,6 +150,11 @@ app.use((req, res, next) => {
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
+// The app's API. Mounted after the auth middleware (which has set req.user /
+// req.guest) and before express.static, so /api/* never falls through to the
+// HTML shell. server/api.js owns every route and the per-profile context.
+registerApi(app, pool, { isStaging: IS_STAGING });
+
 // The template ships no favicon file; index.html carries an inline SVG
 // icon instead. Answer 204 here so anything that still probes
 // /favicon.ico (older browsers, direct visits) doesn't fall through to
@@ -192,9 +200,27 @@ app.get('*', (req, res) => {
 });
 
 async function start() {
+  // Boot order: schema, then staging seed, then accept traffic. Both are
+  // idempotent, so a container restart just re-runs them.
+  await migrate(pool);
+  await seedIfStaging(pool, IS_STAGING);
   const server = app.listen(port, () => console.log(`Listening on :${port}`));
   // Let Envoy retire idle upstream connections at 60s, with a 15s margin.
   server.keepAliveTimeout = 75_000;
+
+  // Stop accepting connections, drain briefly, close the pool, exit.
+  let closing = false;
+  async function shutdown(signal) {
+    if (closing) return;
+    closing = true;
+    console.log(`${signal} received — draining`);
+    server.close(() => { /* connections drained */ });
+    setTimeout(() => process.exit(0), 3000).unref();
+    try { await pool.end(); } catch {}
+    process.exit(0);
+  }
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 start().catch(err => { console.error(err); process.exit(1); });
