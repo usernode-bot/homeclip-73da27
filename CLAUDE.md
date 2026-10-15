@@ -96,13 +96,19 @@ tables you've marked private), etc.
 ## About HomeClip
 
 Watch your homeroom's own serial drama together. HomeClip is a
-mobile-first drama streaming app: an original sample catalog of 30
-invented dramas, detail pages, a real video player with progress
-saving and resume, Discover filters, My List and watch history, and a
-Profile with language and theme settings. The whole UI is bilingual
-(English / Bahasa Indonesia). No sign-up beyond the platform identity,
-no payments. All content is invented for the app: no real show, poster
-or licensed video is used (see `data/catalog.js`).
+mobile-first drama streaming app: a streaming catalog, detail pages, a
+real video player with progress saving and resume, Discover filters,
+My List and watch history, and a Profile with language and theme
+settings. The whole UI is bilingual (English / Bahasa Indonesia). No
+sign-up beyond the platform identity, no payments.
+
+The catalog has two layers. With `TMDB_API_KEY` set, the app seeds
+itself on boot with real dramas verified record-by-record against the
+TMDB API (curated list in `data/real-catalog.js`, import rules in
+`importVerifiedDrama`, acceptance script `npm run verify:posters`).
+The 30 invented sample dramas in `data/catalog.js` remain the no-key
+fallback and the `?demo=1` staging fixture, and are retired from plain
+reads once at least ten verified records exist.
 
 ## Design
 
@@ -111,14 +117,16 @@ or licensed video is used (see `data/catalog.js`).
   (`#0a0a14`), light look a near-white lilac ground. All colours come
   from the tokens in `styles/tailwind-input.css` (`--ground`,
   `--surface`, `--raised`, `--fg`, `--muted`, `--line`, `--accent`).
-- **Signature element:** the per-drama artwork, one free-license
-  photograph per drama (via picsum.photos, Unsplash license, committed
-  as WebP under `public/img/`), matched to the drama's genre and mood.
-  The generated SVG art (`/poster/:id.svg`, `/banner/:id.svg`,
-  deterministic genre-hued gradients with a play-glyph badge) is the
-  fallback every image falls back to when it fails, so the catalog
-  reads as a streaming wall without any licensed imagery or broken
-  images. The Continue Watching row carries a thin accent progress bar
+- **Signature element:** the per-drama artwork. A verified record shows
+  its provider poster (portrait 2:3) and provider backdrop (landscape);
+  artwork URLs always come from the record's own provider image list —
+  never a random or unrelated image. The chain below that: the
+  committed free-license photographs (picsum.photos, WebP under
+  `public/img/`), then the generated SVG art (`/poster/:id.svg`,
+  `/banner/:id.svg`, deterministic genre-hued gradients with a
+  play-glyph badge) which is titled for the drama, then the neutral
+  wordless placeholder as the last resort. The Continue Watching row
+  carries a thin accent progress bar
   (`.hc-progress`) under the title.
   Play affordances (`.hc-playfab` on the banner, `.hc-playbadge` on
   poster cards) are round accent circles with a play glyph; the VIP
@@ -189,6 +197,36 @@ keeping every text pair at 4.5:1 or more in both looks.
 - **No new dependencies** (hls.js, for the tracker player, is the one exception). The frontend is vanilla ES modules in
   `public/js/` with path-based routing in `router.js` (History API);
   styling is precompiled Tailwind only. No framework, no runtime CSS.
+- **Real catalog (TMDB):** `providers/tmdb.js` is the only place that
+  talks to TMDB (`TMDB_API_KEY`, server-side only, declared in
+  `dapp.json`). Every import goes through `importVerifiedDrama`
+  (server.js): it re-fetches the provider record and fails closed
+  unless the confirmed title matches the provider's title OR original
+  title (normalized) and the year matches, and artwork paths come from
+  THAT record's own image lists — the boot seed and the studio import
+  route share the same helper so the rules cannot drift. The boot seed
+  (`seedRealDramas`, concurrency 3, 20-second budget, idempotent,
+  resumes on the next boot) imports the curated `data/real-catalog.js`
+  list; a candidate whose title search returns no same-country,
+  within-one-year show is reported and skipped. Once
+  `realCatalogReady()` counts ten or more non-demo records with a
+  provider id, plain reads hide the sample dramas
+  (`sampleFilter(demo)`, applied in `/api/home`, `/api/dramas`,
+  `/api/dramas/:id`, `/api/my-list` and `/api/facets`); `?demo=1`
+  always sees everything. Verified detail pages carry the TMDB
+  attribution notice (`detail.tmdbNotice`).
+- **Acceptance check:** `npm run verify:posters`
+  (`scripts/verify-posters.js`) re-fetches every provider-linked
+  record and fails unless identity (title/original title, year,
+  country) and artwork URLs (provider CDN URL of the record's own
+  paths, and the link loads) hold for at least `--min` (default 10)
+  records; `--base <origin> --token <jwt>` additionally checks no
+  sample dramas leak onto plain reads and that search and detail serve
+  the same poster. Needs `DATABASE_URL` and `TMDB_API_KEY`.
+- **Artwork probing:** `art-probe.js`'s `probeArtwork(url)` returns
+  `ok` / `broken` / `missing` (relative paths checked on disk under
+  `public/`, absolute URLs HEADed, 10-second timeout); used by the
+  studio's artwork scan/check-art routes and the verify script.
 - **Generated art is served outside `/api/`.** `<img>` and `<track>`
   elements cannot attach the auth header, and the poster, banner and
   subtitle routes return non-sensitive generated content, so they live

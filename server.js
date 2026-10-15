@@ -4,7 +4,9 @@ const fs = require('fs');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
 const { DRAMAS, episodesFor, VIDEO_BASE, VIDEO_POOL } = require('./data/catalog');
+const { REAL_CATALOG } = require('./data/real-catalog');
 const { isProfane, isSpam, loose } = require('./moderation');
+const { probeArtwork } = require('./art-probe');
 const tmdb = require('./providers/tmdb');
 
 const app = express();
@@ -503,15 +505,106 @@ async function seedCatalogDemo() {
     for (let n = 1; n <= d.totalEpisodes; n++) {
       await pool.query(
         `INSERT INTO episodes (drama_id, num, duration_min, video_url)
-         VALUES ($1,$2,$3,'/sample/clip')
-         ON CONFLICT (drama_id, num) DO NOTHING`,
-        [d.id, n, d.durationMin]
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT (drama_id, num) DO UPDATE SET video_url = EXCLUDED.video_url`,
+        // The committed six-clip pool, never a URL that does not exist
+        // (a database seeded by an older boot keeps its /sample/clip rows,
+        // which is why the DO UPDATE refreshes them).
+        [d.id, n, d.durationMin, VIDEO_BASE + VIDEO_POOL[(d.id * 5 + n) % VIDEO_POOL.length]]
       );
     }
     // Stamp the flag even when the row already exists (a database seeded by
     // an older boot keeps its copy), so plain routes always hide these rows.
     await pool.query(`UPDATE dramas SET is_demo = true WHERE id = $1`, [d.id]);
   }
+}
+
+// ── Real catalog: boot-time import of curated, TMDB-verified dramas ──────
+// data/real-catalog.js lists real series with their editorial weight. When
+// TMDB_API_KEY is set, each entry is resolved against the provider and
+// imported through importVerifiedDrama() — the same fail-closed verify the
+// curator studio uses (a fresh provider fetch; normalized title against
+// the provider's title OR original title; exact year). A match that fails
+// writes nothing and is reported: never a guessed poster. Without a key,
+// or when the provider is unreachable, nothing is imported and the app
+// keeps its sample catalog; removing the key rolls the viewer experience
+// straight back. Idempotent: an entry whose tmdb_id is already in the
+// catalog is skipped, so re-boots cost nothing and partial runs resume.
+async function seedRealCatalogEntry(entry) {
+  let tmdbId = entry.tmdbId || null;
+  if (!tmdbId) {
+    // Resolve by search: the first candidate whose first-air year is
+    // within ±1 and whose origin country matches the entry. The exact
+    // title/year verify still happens inside importVerifiedDrama against
+    // a fresh fetch, so a search mix-up (say, an anime remake airing a
+    // year off) fails the verify instead of saving a wrong record.
+    const cands = await tmdb.searchTv(entry.title);
+    for (const c of cands) {
+      if (Math.abs((c.year || 0) - entry.year) > 1) continue;
+      if (entry.country && c.originCountry !== entry.country) continue;
+      tmdbId = c.tmdbId;
+      break;
+    }
+  }
+  if (!tmdbId) {
+    console.error('[real-catalog] no provider match:', entry.title, '— skipped');
+    return false;
+  }
+  const dup = await pool.query('SELECT id FROM dramas WHERE tmdb_id = $1', [tmdbId]);
+  if (dup.rowCount) return true; // imported on an earlier boot
+  const out = await importVerifiedDrama({
+    tmdbId,
+    confirmTitle: entry.title,
+    confirmYear: entry.year,
+    contentType: 'series',
+    defaultArtwork: true,
+  });
+  const id = out.id;
+  // Editorial weight, applied after the verified import so the drama sits
+  // where the curation put it (a studio import never sets these).
+  const sets = ['popularity = $1'];
+  const params = [entry.popularity || 0];
+  if (entry.featured) { params.push(entry.featured); sets.push(`featured = $${params.length}`); }
+  if (entry.isTrending) { params.push(true); sets.push(`is_trending = $${params.length}`); }
+  params.push(id);
+  await pool.query(`UPDATE dramas SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+  // The paywall stays demonstrable once the sample catalog leaves the
+  // plain viewer reads: the entry's final N episodes are VIP.
+  const vip = entry.vipEpisodes || 0;
+  if (vip > 0) {
+    await pool.query(
+      `UPDATE episodes SET access = 'vip'
+       WHERE drama_id = $1 AND num > (SELECT MAX(num) FROM episodes WHERE drama_id = $1) - $2`,
+      [id, vip]
+    );
+  }
+  console.log('[real-catalog] imported #' + id, entry.title);
+  return true;
+}
+
+async function seedRealDramas() {
+  if (!tmdb.configured() || !REAL_CATALOG.length) return;
+  const started = Date.now();
+  const BUDGET_MS = 20_000; // per boot; the rest resumes on the next one
+  const skipped = [];
+  let imported = 0;
+  let next = 0;
+  const runOne = async () => {
+    while (next < REAL_CATALOG.length) {
+      const entry = REAL_CATALOG[next++];
+      if (Date.now() - started > BUDGET_MS) { skipped.push(entry.title); continue; }
+      try {
+        if (await seedRealCatalogEntry(entry)) imported++;
+        else skipped.push(entry.title);
+      } catch (e) {
+        skipped.push(entry.title);
+        console.error('[real-catalog]', entry.title, '→', e.code || e.message);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 3 }, runOne));
+  console.log('[real-catalog] imported ' + imported + ', skipped ' + skipped.length +
+    (skipped.length ? ': ' + skipped.join(', ') : ''));
 }
 
 // ── Demo fixture (first version's populated demo, behind ?demo=1) ─────────
@@ -565,6 +658,39 @@ function wantsDemo(req) {
 // tracker routes use for their own demo rows.
 function catalogDemoWhere(demo) {
   return demo ? '' : ' AND NOT d.is_demo';
+}
+
+// ── Sample-catalog retirement ─────────────────────────────────────────────
+// The 30 invented sample dramas (ids < 9000, artwork from the committed
+// stock photos) are the no-key fallback. Once a real, TMDB-verified
+// catalog exists (REAL_CATALOG_MIN verified records), plain viewer reads
+// stop serving them: their stock photography is exactly what a real
+// poster must not be mistaken for. The rows stay in the database — the
+// viewer demo fixture references them, and removing the TMDB key rolls
+// the viewer experience straight back. ?demo=1 always sees everything.
+const REAL_CATALOG_MIN = 10;
+
+let realReady = null;
+let realReadyAt = 0;
+async function realCatalogReady() {
+  if (realReady !== null && Date.now() - realReadyAt < 60_000) return realReady;
+  try {
+    const r = await pool.query(
+      'SELECT count(*)::int AS n FROM dramas WHERE tmdb_id IS NOT NULL AND NOT is_demo');
+    realReady = r.rows[0].n >= REAL_CATALOG_MIN;
+  } catch (e) {
+    realReady = false;
+  }
+  realReadyAt = Date.now();
+  return realReady;
+}
+
+// Extra WHERE fragment that hides the sample rows on plain reads once the
+// real catalog is ready. Never applied under ?demo=1.
+async function sampleFilter(demo) {
+  if (demo) return '';
+  return (await realCatalogReady())
+    ? ' AND NOT (d.id < 9000 AND d.tmdb_id IS NULL)' : '';
 }
 
 // The viewing account's demo PROFILES: two fake profiles written once on
@@ -703,24 +829,25 @@ app.get('/api/home', async (req, res) => {
     if (has.rowCount === 0) await seedViewerDemo(req.user.id);
   }
   const demoFilter = catalogDemoWhere(demo);
+  const sample = await sampleFilter(demo);
   const [featured, trending, series, recent, top10, shorts, cont] = await Promise.all([
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE featured IS NOT NULL${demoFilter} ORDER BY featured LIMIT 5`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE featured IS NOT NULL${demoFilter}${sample} ORDER BY featured LIMIT 5`),
     // Trending: the editorial is_trending pin over the popularity signal.
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter} ORDER BY d.is_trending DESC, d.popularity DESC LIMIT 12`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter}${sample} ORDER BY d.is_trending DESC, d.popularity DESC LIMIT 12`),
     // Popular Series: the catalog's series, most popular first — the
     // shorts' counterpart row.
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.content_type = 'series'${demoFilter} ORDER BY d.popularity DESC LIMIT 12`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.content_type = 'series'${demoFilter}${sample} ORDER BY d.popularity DESC LIMIT 12`),
     // Recently Added: the newest catalog entries first, so a drama a
     // curator just imported leads the row.
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter} ORDER BY d.id DESC LIMIT 12`),
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter} ORDER BY d.rating DESC, d.popularity DESC LIMIT 10`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter}${sample} ORDER BY d.id DESC LIMIT 12`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter}${sample} ORDER BY d.rating DESC, d.popularity DESC LIMIT 10`),
     // Short dramas: a row of their own when the catalog has any.
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.content_type = 'short'${demoFilter} ORDER BY d.popularity DESC LIMIT 12`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.content_type = 'short'${demoFilter}${sample} ORDER BY d.popularity DESC LIMIT 12`),
     req.user
       ? pool.query(
           `SELECT ${DRAMA_FIELDS}, w.ep, w.seconds, w.duration, w.updated_at
            FROM watch_progress w JOIN dramas d ON d.id = w.drama_id
-           WHERE w.user_id = $1 ${demo ? '' : 'AND w.is_demo = false'}${demoFilter}
+           WHERE w.user_id = $1 ${demo ? '' : 'AND w.is_demo = false'}${demoFilter}${sample}
            ORDER BY w.updated_at DESC LIMIT 12`,
           [req.user.id])
       : { rows: [] },
@@ -745,6 +872,8 @@ app.get('/api/dramas', async (req, res) => {
   const where = [];
   const params = [];
   if (!demo) where.push('NOT d.is_demo');
+  const sampleWhere = (await sampleFilter(demo)).replace(/^ AND /, '');
+  if (sampleWhere) where.push(sampleWhere);
   if (genre && ['romance', 'thriller', 'fantasy', 'comedy', 'historical', 'action', 'drama'].includes(genre)) {
     params.push(genre); where.push(`$${params.length} = ANY(d.genres)`);
   }
@@ -755,7 +884,10 @@ app.get('/api/dramas', async (req, res) => {
     params.push(Number(year)); where.push(`d.year = $${params.length}`);
   }
   if (q && typeof q === 'string' && q.trim()) {
-    params.push('%' + q.trim() + '%'); where.push(`d.title ILIKE $${params.length}`);
+    params.push('%' + q.trim() + '%');
+    // Real records carry the provider's original title too: search matches
+    // either name, so a K-drama is findable under 사랑의 불시착 as well.
+    where.push(`(d.title ILIKE $${params.length} OR d.original_title ILIKE $${params.length})`);
   }
   const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
   const orderSql = sort === 'newest' ? 'ORDER BY d.year DESC, d.id DESC' : 'ORDER BY d.popularity DESC, d.rating DESC';
@@ -778,8 +910,15 @@ app.get('/api/dramas/:id', async (req, res) => {
   if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'not_found' });
   const d = await pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.id = $1`, [id]);
   if (d.rowCount === 0) return res.status(404).json({ error: 'not_found' });
-  // Staging demo rows stay behind ?demo=1, like the list routes.
+  // Staging demo rows stay behind ?demo=1, like the list routes. So do the
+  // sample dramas once the real catalog is ready (same filter as the list
+  // routes) — under ?demo=1 they stay reachable, and the viewer demo
+  // fixture keeps working.
   if (d.rows[0].is_demo && !wantsDemo(req)) return res.status(404).json({ error: 'not_found' });
+  if (!wantsDemo(req) && d.rows[0].id < 9000 && !d.rows[0].tmdb_id &&
+      (await sampleFilter(false))) {
+    return res.status(404).json({ error: 'not_found' });
+  }
   const eps = await pool.query(
     'SELECT num, duration_min, video_url, access, fallback_url FROM episodes WHERE drama_id = $1 ORDER BY num', [id]
   );
@@ -872,6 +1011,140 @@ app.get('/api/admin/tmdb/tv/:tmdbId', h(async (req, res) => {
   res.json({ record: await tmdb.getTv(tmdbId) });
 }));
 
+// Verify and import one provider record. Shared by the curator route
+// (POST /api/admin/dramas/import) and the boot-time real-catalog seed, so
+// the verification rules cannot drift apart. b carries { tmdbId,
+// confirmTitle, confirmYear, posterPath?, backdropPath?, contentType?,
+// dramaId? }; confirmTitle/confirmYear are required unless this is an
+// artwork-only replace (dramaId set, no confirm fields). b.defaultArtwork
+// (the boot seed) picks the record's first poster and backdrop when the
+// caller names no paths. Throws a coded Error on a failed check: the route
+// maps it to its HTTP answer, the seed logs and skips the entry.
+function importError(code, status) {
+  const err = new Error(code);
+  err.code = code;
+  err.status = status;
+  return err;
+}
+
+async function importVerifiedDrama(b) {
+  const contentType = b.contentType === 'short' ? 'short' : 'series';
+  if (!tmdb.configured()) throw importError('tmdb_not_configured', 503);
+  const tmdbId = parseInt(b.tmdbId, 10);
+  if (!Number.isInteger(tmdbId) || tmdbId <= 0) throw importError('bad_request', 400);
+  const raw = await tmdb.getTv(tmdbId);
+  // Artwork-only replace on an existing record (the studio's Replace
+  // panel): no title/year confirm — the fresh provider fetch is still
+  // where the artwork paths are validated, and the record's verified
+  // metadata is left untouched.
+  const artworkOnly = b.dramaId && b.confirmTitle === undefined;
+  const nt = normTitle(b.confirmTitle);
+  if (!artworkOnly) {
+    const verifyOk = nt
+      && (nt === normTitle(raw.title) || nt === normTitle(raw.originalTitle))
+      && Number(b.confirmYear) === raw.year;
+    if (!verifyOk) throw importError('verify_failed', 422);
+  }
+  if (artworkOnly && !b.posterPath && !b.backdropPath) {
+    throw importError('bad_request', 400);
+  }
+
+  // The provider's content ID prevents duplicate records; re-importing a
+  // show that is already in the catalog answers the existing drama.
+  const dup = await pool.query('SELECT id FROM dramas WHERE tmdb_id = $1', [tmdbId]);
+  if (dup.rowCount && dup.rows[0].id !== b.dramaId) {
+    const err = importError('tmdb_duplicate', 409);
+    err.existingId = dup.rows[0].id;
+    throw err;
+  }
+
+  // Artwork paths must come from THIS record's own image lists.
+  const requestedPoster = b.posterPath ||
+    (b.defaultArtwork && raw.posters.length ? raw.posters[0].path : null);
+  const requestedBackdrop = b.backdropPath ||
+    (b.defaultArtwork && raw.backdrops.length ? raw.backdrops[0].path : null);
+  const posterPath = requestedPoster && raw.posters.some((p) => p.path === requestedPoster)
+    ? requestedPoster : null;
+  const backdropPath = requestedBackdrop && raw.backdrops.some((p) => p.path === requestedBackdrop)
+    ? requestedBackdrop : null;
+  if ((requestedPoster && !posterPath) || (requestedBackdrop && !backdropPath)) {
+    throw importError('unknown_artwork', 422);
+  }
+  const urls = await tmdb.artworkUrls(posterPath, backdropPath);
+
+  const values = [
+    raw.title, raw.originalTitle, raw.alternativeTitles, urls.posterUrl, urls.backdropUrl,
+    raw.year, raw.country || '', raw.language, raw.genresRaw, tmdb.mapGenres(raw.genresRaw),
+    raw.overview, raw.cast, raw.director, raw.totalEpisodes, raw.episodeDurationMin,
+    contentType, raw.rating, tmdbId,
+    'https://www.themoviedb.org/tv/' + tmdbId,
+  ];
+
+  if (b.dramaId) {
+    // Re-verify / replace on an existing record (poster replacement).
+    const id = parseInt(b.dramaId, 10);
+    const cur = await pool.query('SELECT id FROM dramas WHERE id = $1', [id]);
+    if (!cur.rowCount) throw importError('not_found', 404);
+    if (artworkOnly) {
+      // The artwork columns only: the verified metadata stays as it is.
+      await pool.query(
+        `UPDATE dramas SET poster_url=$1, backdrop_url=$2,
+           needs_review=false, review_reason=NULL
+         WHERE id=$3`,
+        [urls.posterUrl, urls.backdropUrl, id]
+      );
+      return { ok: true, id };
+    }
+    await pool.query(
+      `UPDATE dramas SET title=$1, original_title=$2, alternative_titles=$3, poster_url=$4,
+         backdrop_url=$5, year=$6, country=$7, language=$8, genres_raw=$9, genres=$10,
+         synopsis_en=$11, cast_names=$12, director=$13, total_episodes=$14,
+         episode_duration_min=$15, content_type=$16, rating=$17, tmdb_id=$18, source_url=$19,
+         verified=true, verified_at=now(), needs_review=false, review_reason=NULL
+       WHERE id=$20`,
+      [...values, id]
+    );
+    return { ok: true, id };
+  }
+
+  // New record: allocate the next id with a small retry. The boot seed and
+  // simultaneous curators can compute the same MAX(id)+1; the loser retries
+  // on the unique violation with the fresh max.
+  let id;
+  for (let attempt = 0; ; attempt++) {
+    const nxt = await pool.query('SELECT COALESCE(MAX(id), 0) + 1 AS n FROM dramas');
+    id = nxt.rows[0].n;
+    try {
+      await pool.query(
+        `INSERT INTO dramas (id, title, original_title, alternative_titles, poster_url, backdrop_url,
+           year, country, language, genres_raw, genres, synopsis_en, synopsis_id, cast_names, director,
+           total_episodes, episode_duration_min, content_type, rating, popularity, tmdb_id, source_url,
+           verified, verified_at, needs_review)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'',$13,$14,$15,$16,$17,$18,0,$19,$20,
+           true, now(), false)`,
+        [id, ...values]
+      );
+      break;
+    } catch (e) {
+      if (e.code === '23505' && attempt < 2) continue;
+      throw e;
+    }
+  }
+  // Episodes point at the committed six-clip pool so playback keeps
+  // working — the catalog's stride (id*5+n)%6, never a URL that does not
+  // exist. A flat 1..n list for phase one (no season column yet).
+  const eps = Math.min(raw.totalEpisodes || 0, 100);
+  for (let n = 1; n <= eps; n++) {
+    await pool.query(
+      `INSERT INTO episodes (drama_id, num, duration_min, video_url)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (drama_id, num) DO NOTHING`,
+      [id, n, raw.episodeDurationMin || 45, VIDEO_BASE + VIDEO_POOL[(id * 5 + n) % VIDEO_POOL.length]]
+    );
+  }
+  return { ok: true, id };
+}
+
 // Verify and import. With tmdbId: the server re-fetches the record and
 // checks the curator's confirmed title (against the provider's title OR
 // original title) and year BEFORE writing; a mismatch writes nothing.
@@ -879,128 +1152,41 @@ app.get('/api/admin/tmdb/tv/:tmdbId', h(async (req, res) => {
 app.post('/api/admin/dramas/import', h(async (req, res) => {
   if (!requireCurator(req, res)) return;
   const b = req.body || {};
-  const contentType = b.contentType === 'short' ? 'short' : 'series';
-
-  if (b.tmdbId) {
-    if (!tmdb.configured()) return res.status(503).json({ error: 'tmdb_not_configured' });
-    const tmdbId = parseInt(b.tmdbId, 10);
-    if (!Number.isInteger(tmdbId) || tmdbId <= 0) return res.status(400).json({ error: 'bad_request' });
-    const raw = await tmdb.getTv(tmdbId);
-    // Artwork-only replace on an existing record (the studio's Replace
-    // panel): no title/year confirm — the fresh provider fetch is still
-    // where the artwork paths are validated, and the record's verified
-    // metadata is left untouched.
-    const artworkOnly = b.dramaId && b.confirmTitle === undefined;
-    const nt = normTitle(b.confirmTitle);
-    if (!artworkOnly) {
-      const verifyOk = nt
-        && (nt === normTitle(raw.title) || nt === normTitle(raw.originalTitle))
-        && Number(b.confirmYear) === raw.year;
-      if (!verifyOk) return res.status(422).json({ error: 'verify_failed' });
-    }
-    if (artworkOnly && !b.posterPath && !b.backdropPath) {
+  if (!b.tmdbId) {
+    // Manual record: no provider match. Saved needs_review with NO artwork —
+    // the neutral placeholder, never a stand-in poster.
+    const contentType = b.contentType === 'short' ? 'short' : 'series';
+    const title = String(b.title || '').trim();
+    if (!title || title.length > 120) return res.status(400).json({ error: 'bad_request' });
+    const year = parseInt(b.year, 10);
+    if (!Number.isInteger(year) || year < 1900 || year > 2100) {
       return res.status(400).json({ error: 'bad_request' });
     }
-
-    // The provider's content ID prevents duplicate records; re-importing a
-    // show that is already in the catalog answers the existing drama.
-    const dup = await pool.query('SELECT id FROM dramas WHERE tmdb_id = $1', [tmdbId]);
-    if (dup.rowCount && dup.rows[0].id !== b.dramaId) {
-      return res.status(409).json({ error: 'tmdb_duplicate', existingId: dup.rows[0].id });
-    }
-
-    // Artwork paths must come from THIS record's own image lists.
-    const posterPath = b.posterPath && raw.posters.some((p) => p.path === b.posterPath)
-      ? b.posterPath : null;
-    const backdropPath = b.backdropPath && raw.backdrops.some((p) => p.path === b.backdropPath)
-      ? b.backdropPath : null;
-    if ((b.posterPath && !posterPath) || (b.backdropPath && !backdropPath)) {
-      return res.status(422).json({ error: 'unknown_artwork' });
-    }
-    const urls = await tmdb.artworkUrls(posterPath, backdropPath);
-
-    const values = [
-      raw.title, raw.originalTitle, raw.alternativeTitles, urls.posterUrl, urls.backdropUrl,
-      raw.year, raw.country || '', raw.language, raw.genresRaw, tmdb.mapGenres(raw.genresRaw),
-      raw.overview, raw.cast, raw.director, raw.totalEpisodes, raw.episodeDurationMin,
-      contentType, raw.rating, tmdbId,
-      'https://www.themoviedb.org/tv/' + tmdbId,
-    ];
-
-    if (b.dramaId) {
-      // Re-verify / replace on an existing record (poster replacement).
-      const id = parseInt(b.dramaId, 10);
-      const cur = await pool.query('SELECT id FROM dramas WHERE id = $1', [id]);
-      if (!cur.rowCount) return res.status(404).json({ error: 'not_found' });
-      if (artworkOnly) {
-        // The artwork columns only: the verified metadata stays as it is.
-        await pool.query(
-          `UPDATE dramas SET poster_url=$1, backdrop_url=$2,
-             needs_review=false, review_reason=NULL
-           WHERE id=$3`,
-          [urls.posterUrl, urls.backdropUrl, id]
-        );
-        return res.json({ ok: true, id });
-      }
-      await pool.query(
-        `UPDATE dramas SET title=$1, original_title=$2, alternative_titles=$3, poster_url=$4,
-           backdrop_url=$5, year=$6, country=$7, language=$8, genres_raw=$9, genres=$10,
-           synopsis_en=$11, cast_names=$12, director=$13, total_episodes=$14,
-           episode_duration_min=$15, content_type=$16, rating=$17, tmdb_id=$18, source_url=$19,
-           verified=true, verified_at=now(), needs_review=false, review_reason=NULL
-         WHERE id=$20`,
-        [...values, id]
-      );
-      return res.json({ ok: true, id });
-    }
-
+    const country = /^[a-z]{2}$/.test(String(b.country || '')) ? String(b.country) : '';
+    const synopsis = String(b.synopsis || '').slice(0, 2000);
+    const genres = Array.isArray(b.genres)
+      ? b.genres.filter((g) => ['romance', 'thriller', 'fantasy', 'comedy', 'historical', 'action', 'drama'].includes(g))
+      : [];
     const nxt = await pool.query('SELECT COALESCE(MAX(id), 0) + 1 AS n FROM dramas');
     const id = nxt.rows[0].n;
     await pool.query(
-      `INSERT INTO dramas (id, title, original_title, alternative_titles, poster_url, backdrop_url,
-         year, country, language, genres_raw, genres, synopsis_en, synopsis_id, cast_names, director,
-         total_episodes, episode_duration_min, content_type, rating, popularity, tmdb_id, source_url,
-         verified, verified_at, needs_review)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'',$13,$14,$15,$16,$17,$18,0,$19,$20,
-         true, now(), false)`,
-      [id, ...values]
+      `INSERT INTO dramas (id, title, year, country, genres, synopsis_en, synopsis_id, content_type,
+         popularity, verified, needs_review, review_reason)
+       VALUES ($1,$2,$3,$4,$5,$6,'',$7,0,false,true,'manual')`,
+      [id, title, year, country, genres, synopsis, contentType]
     );
-    // Episodes point at the committed sample clip so playback keeps working;
-    // a flat 1..n list for phase one (no season column yet).
-    const eps = Math.min(raw.totalEpisodes || 0, 100);
-    for (let n = 1; n <= eps; n++) {
-      await pool.query(
-        `INSERT INTO episodes (drama_id, num, duration_min, video_url)
-         VALUES ($1,$2,$3,'/sample/clip')
-         ON CONFLICT (drama_id, num) DO NOTHING`,
-        [id, n, raw.episodeDurationMin || 45]
-      );
+    return res.json({ ok: true, id, needsReview: true });
+  }
+  try {
+    res.json(await importVerifiedDrama(b));
+  } catch (e) {
+    if (e.status) {
+      const body = { error: e.code };
+      if (e.existingId !== undefined) body.existingId = e.existingId;
+      return res.status(e.status).json(body);
     }
-    return res.json({ ok: true, id });
+    throw e;
   }
-
-  // Manual record: no provider match. Saved needs_review with NO artwork —
-  // the neutral placeholder, never a stand-in poster.
-  const title = String(b.title || '').trim();
-  if (!title || title.length > 120) return res.status(400).json({ error: 'bad_request' });
-  const year = parseInt(b.year, 10);
-  if (!Number.isInteger(year) || year < 1900 || year > 2100) {
-    return res.status(400).json({ error: 'bad_request' });
-  }
-  const country = /^[a-z]{2}$/.test(String(b.country || '')) ? String(b.country) : '';
-  const synopsis = String(b.synopsis || '').slice(0, 2000);
-  const genres = Array.isArray(b.genres)
-    ? b.genres.filter((g) => ['romance', 'thriller', 'fantasy', 'comedy', 'historical', 'action', 'drama'].includes(g))
-    : [];
-  const nxt = await pool.query('SELECT COALESCE(MAX(id), 0) + 1 AS n FROM dramas');
-  const id = nxt.rows[0].n;
-  await pool.query(
-    `INSERT INTO dramas (id, title, year, country, genres, synopsis_en, synopsis_id, content_type,
-       popularity, verified, needs_review, review_reason)
-     VALUES ($1,$2,$3,$4,$5,$6,'',$7,0,false,true,'manual')`,
-    [id, title, year, country, genres, synopsis, contentType]
-  );
-  res.json({ ok: true, id, needsReview: true });
 }));
 
 // Curator record list: every catalog drama with its flags, for the studio's
@@ -1078,29 +1264,8 @@ app.patch('/api/admin/dramas/:id', h(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// Probe one stored artwork URL. Absolute URLs (the provider CDN) are
-// HEADed; a same-origin relative path is always one of the app's own
-// committed files, so it is checked against public/ on disk — fetch cannot
-// open a relative URL, and a self-request would need a base URL the server
-// does not reliably know. Returns 'ok' | 'broken' | 'missing'.
-const ART_PROBE_TIMEOUT_MS = 10_000;
-async function probeArtwork(url) {
-  if (!url) return 'missing';
-  if (url.startsWith('/')) {
-    try {
-      await fs.promises.access(path.join(__dirname, 'public', url.replace(/^\/+/, '')));
-      return 'ok';
-    } catch (e) {
-      return 'broken';
-    }
-  }
-  try {
-    const r = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(ART_PROBE_TIMEOUT_MS) });
-    return r.ok ? 'ok' : 'broken';
-  } catch (e) {
-    return 'broken';
-  }
-}
+// probeArtwork(url) → 'ok' | 'broken' | 'missing' lives in art-probe.js,
+// shared with scripts/verify-posters.js.
 
 // The artwork defect on one record, if any: a stored link that no longer
 // loads, or (on a verified record) no poster at all. Null means clean.
@@ -1178,10 +1343,11 @@ app.get('/api/my-list', async (req, res) => {
     const has = await pool.query('SELECT 1 FROM my_list WHERE user_id=$1 UNION ALL SELECT 1 FROM watch_progress WHERE user_id=$1 LIMIT 1', [req.user.id]);
     if (has.rowCount === 0) await seedViewerDemo(req.user.id);
   }
+  const sampleMyList = await sampleFilter(demo);
   const r = await pool.query(
     `SELECT ${DRAMA_FIELDS}, m.added_at
      FROM my_list m JOIN dramas d ON d.id = m.drama_id
-     WHERE m.user_id = $1 ${demo ? '' : 'AND m.is_demo = false'}${demo ? '' : ' AND NOT d.is_demo'}
+     WHERE m.user_id = $1 ${demo ? '' : 'AND m.is_demo = false'}${demo ? '' : ' AND NOT d.is_demo'}${sampleMyList}
      ORDER BY m.added_at DESC`,
     [req.user ? req.user.id : 0]
   );
@@ -1246,11 +1412,13 @@ app.post('/api/progress', async (req, res) => {
 });
 
 app.get('/api/facets', async (req, res) => {
-  const demoFilter = catalogDemoWhere(wantsDemo(req));
+  const demo = wantsDemo(req);
+  const demoFilter = catalogDemoWhere(demo);
+  const sample = await sampleFilter(demo);
   const r = await pool.query(
-    `SELECT DISTINCT country FROM dramas d WHERE true${demoFilter} ORDER BY country`
+    `SELECT DISTINCT country FROM dramas d WHERE true${demoFilter}${sample} ORDER BY country`
   );
-  const y = await pool.query(`SELECT DISTINCT year FROM dramas d WHERE true${demoFilter} ORDER BY year DESC`);
+  const y = await pool.query(`SELECT DISTINCT year FROM dramas d WHERE true${demoFilter}${sample} ORDER BY year DESC`);
   res.json({ countries: r.rows.map(x => x.country), years: y.rows.map(x => x.year) });
 });
 
@@ -3709,6 +3877,13 @@ async function start() {
   await pool.query(CATALOG_ALTER_SQL);
   await seedCatalog();
   await ensureTrackerSchema();
+  // The real catalog import needs the schema and the sample seed in place
+  // (it computes new ids from MAX(id)); a failure never blocks boot.
+  try {
+    await seedRealDramas();
+  } catch (err) {
+    console.error('real catalog seed failed', err);
+  }
   if (IS_STAGING) {
     try {
       await seedCatalogDemo();

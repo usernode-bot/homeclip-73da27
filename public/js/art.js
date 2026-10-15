@@ -56,9 +56,10 @@ const GENRE_HUES = {
   comedy: 28, historical: 165, action: 280,
 };
 
-// Neutral placeholders for records without verified artwork: a quiet grey
-// film-frame glyph, no title, no photo — the same one everywhere, and it is
-// never a stand-in that could belong to another show.
+// Wordless placeholders — the LAST resort only (a generated art URL that
+// failed too) and the studio's thumbs, where a curator must still tell "no
+// artwork" from "generated art". Viewer screens fall back to the drama's
+// own generated title art first, never straight to a blank frame.
 const PLACEHOLDER_POSTER = '/img/placeholder-poster.svg';
 const PLACEHOLDER_BACKDROP = '/img/placeholder-backdrop.svg';
 
@@ -89,15 +90,20 @@ export function bannerArt(d) {
   return backdropArt(d) || posterArt(d, 600);
 }
 
-// First fallback for a FAILED image: committed art falls to the generated
-// gradient art (titled correctly), record-driven art falls to the neutral
-// placeholder — never to an unrelated photo.
+// First fallback for a FAILED image, and the art for a record with no
+// verified artwork at all: the app's own generated art (/poster/:id.svg,
+// /banner/:id.svg), built from the drama's own record — its title, year
+// and country on a genre-hued gradient. It is never an unrelated image:
+// the same drama reads the same titled art everywhere until real artwork
+// is imported. The wordless neutral placeholder is only the LAST resort
+// (a generated URL that failed too) and the studio's thumbs, where a
+// curator must still be able to tell "no artwork" from "generated art".
 export function posterFallback(d) {
-  return photoOf(d && d.id) ? '/poster/' + d.id + '.svg' : PLACEHOLDER_POSTER;
+  return d && d.id ? '/poster/' + d.id + '.svg' : PLACEHOLDER_POSTER;
 }
 
 export function backdropFallback(d) {
-  return photoOf(d && d.id) ? '/banner/' + d.id + '.svg' : PLACEHOLDER_BACKDROP;
+  return d && d.id ? '/banner/' + d.id + '.svg' : PLACEHOLDER_BACKDROP;
 }
 
 // Episode still: the sample drama's own photo and its genre's pool cycle by
@@ -128,7 +134,11 @@ export function artImg(d, opts) {
   const alt = (o.alt || '').replace(/"/g, '&quot;');
   const src = posterArt(d, o.width || 300);
   if (!src) {
-    return '<img data-art class="' + (o.cls || '') + '" src="' + PLACEHOLDER_POSTER +
+    // No verified artwork and no committed photo: the drama's own generated
+    // title art (see posterFallback). The wordless placeholder only when
+    // even the record's id is unknown.
+    const gen = posterFallback(d);
+    return '<img data-art class="' + (o.cls || '') + '" src="' + gen +
       '" alt="' + alt + '" loading="lazy" decoding="async">';
   }
   const lqip = lqipArt(d, 'p');
