@@ -78,6 +78,7 @@
        classes, swap this link for the platform-hosted engine instead:
        <script src="/usernode-tailwind/v1/tailwind.js"></script> -->
   <link rel="stylesheet" href="/tailwind.css">
+  <link rel="stylesheet" href="/screens.css">
   <!-- The platform bridge, centrally hosted and loaded by RELATIVE path (the
        handler in server.js serves it under a plain "node server.js"; the
        platform's edge answers it everywhere else). Never vendor it and never
@@ -115,21 +116,62 @@
   <!-- (Named in prose on purpose: Tailwind compiles any class-name word in
        these files, comments included, and the starter should ship only the
        components its screen uses.) -->
-  <main class="mx-auto flex max-w-md flex-col gap-8 px-4 py-10">
+  <!-- usernode-spec-screens@1: the screens the spec drew, carried over by the platform as this
+       first version's starting point. Their styles are in public/screens.css.
+       Change them where behaviour needs it; do not redraw them. -->
+  <div data-spec-screen="1">
+    <div class="app">
+    <div class="top"><div class="brand"><svg style="color:rgb(var(--accent));width:24px;height:24px" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M9 21h6M12 17v4"/></svg>HomeClip</div><button class="btn-secondary"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add drama</button></div>
+    <div class="pad">
+    <div class="section-label">Next to watch</div>
+    <div class="hero">
+    <div class="tv"><small>Harbour Lights, Season 2</small><div class="h">Episode 6: The Tide Table</div><div class="bar"><i style="width:55%"></i></div></div>
+    <div style="display:flex;align-items:center;gap:12px;margin-top:12px"><div class="grow sm muted">5 of 9 watched this season<br>52 min</div><button class="btn-primary"><svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg>Watch</button></div>
+    </div>
 
-    <!-- usernode-starter-notice@1 — starter-template messaging. When building
-         the user's real app, replace this whole screen and delete this block,
-         both sentinel comments included. -->
-    <section class="card flex flex-col items-start gap-3">
-      <div class="flex h-20 w-20 items-center justify-center rounded-2xl border border-line bg-ground text-title">📺</div>
-      <span class="rounded-full bg-raised px-3 py-1 text-small font-medium text-muted">Starter template</span>
-      <h1 class="text-title">HomeClip</h1>
-      <p class="text-body text-muted">Welcome to your new app! Everything on this screen is placeholder content that came with it.</p>
-      <p class="text-body text-muted">To change this app, ask Homeroom bot: tap the <strong class="font-semibold text-fg">Homeroom icon</strong>, then <strong class="font-semibold text-fg">Suggest an improvement</strong>. Describe what you'd like in plain English, and it will be turned into your real app.</p>
-    </section>
-    <!-- /usernode-starter-notice@1 -->
+    <div class="section-label">Continue this season</div>
+    <div class="row">
+    <div class="ep"><div class="scr">Ep 7</div><div class="foot"></div><div class="sm">The Long Way Round</div></div>
+    <div class="ep"><div class="scr">Ep 8</div><div class="foot"></div><div class="sm">Salt and Iron</div></div>
+    <div class="ep"><div class="scr">Ep 9</div><div class="foot"></div><div class="sm">Last Ferry</div></div>
+    </div>
 
-    <p class="text-center text-small text-muted">Built on Homeroom. This template screen disappears once you build your real app.</p>
-  </main>
+    <div class="section-label">Drama feed</div>
+    <ul class="list">
+    <li class="list-row"><div class="poster" style="background:rgb(var(--accent))"></div><div class="grow"><div style="font-weight:600">Harbour Lights</div><div class="sm muted">2 seasons, 17 episodes</div><div class="bar" style="margin-top:6px"><i style="width:55%"></i></div></div><button class="fol">Following</button></li>
+    <li class="list-row"><div class="poster" style="background:rgb(var(--action))"></div><div class="grow"><div style="font-weight:600">The Quiet Wing</div><div class="sm muted">1 season, 8 episodes</div><div class="bar" style="margin-top:6px"><i style="width:25%"></i></div></div><button class="fol">Following</button></li>
+    <li class="list-row"><div class="poster" style="background:rgb(var(--fg))"></div><div class="grow"><div style="font-weight:600">Ninth Street</div><div class="sm muted">3 seasons, 30 episodes</div><span class="chip">New episode</span></div><button class="btn-secondary">Follow</button></li>
+    <li class="list-row"><div class="poster" style="background:rgb(var(--muted))"></div><div class="grow"><div style="font-weight:600">Meridian Court</div><div class="sm muted">1 season, 10 episodes</div><div class="sm tag">Watched by Priya and Sam</div></div><button class="btn-secondary">Follow</button></li>
+    <li class="list-row"><div class="poster" style="background:rgb(var(--accent));opacity:.7"></div><div class="grow"><div style="font-weight:600">Copper Hill</div><div class="sm muted">2 seasons, 14 episodes</div><div class="sm tag">You finished it</div></div><button class="btn-secondary">Follow</button></li>
+    </ul>
+    </div>
+    </div>
+  </div>
+  <!-- Screen 2 as the spec drew it: inert until moved where that view belongs. -->
+  <template data-spec-screen="2">
+    <div data-spec-screen="2">
+      <div class="app">
+      <div class="top"><button class="icon-btn" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><span class="sm muted">Drama feed</span></div>
+      <div class="pad">
+      <div class="head"><div class="poster"></div><div class="grow"><h1 class="title">Harbour Lights</h1><div class="sm muted">A ferry town keeps its secrets one tide at a time. Added by Sam</div><div style="margin-top:8px"><button class="fol">Following</button></div></div></div>
+
+      <div class="section-label">Seasons</div>
+      <div class="seg"><button>Season 1</button><button class="on">Season 2</button></div>
+      <div class="bar"><i style="width:55%"></i></div>
+      <div class="sm muted">5 of 9 watched this season</div>
+
+      <div class="section-label">Episodes</div>
+      <ul class="list">
+      <li class="list-row"><div class="scr">5</div><div class="grow"><div style="font-weight:500">Low Water</div><div class="sm muted">48 min, watched by you, Priya and Sam</div></div><button class="check" aria-label="Watched"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg></button></li>
+      <li class="list-row"><div class="scr next">6</div><div class="grow"><div style="font-weight:600">The Tide Table</div><div class="sm muted">52 min, watched by Priya</div></div><button class="btn-primary"><svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg>Watch</button></li>
+      <li class="list-row"><div class="scr">7</div><div class="grow"><div style="font-weight:500">The Long Way Round</div><div class="sm muted">50 min</div></div><button class="check off" aria-label="Mark watched"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg></button></li>
+      <li class="list-row"><div class="scr">8</div><div class="grow"><div style="font-weight:500">Salt and Iron</div><div class="sm muted">47 min</div></div><button class="check off" aria-label="Mark watched"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg></button></li>
+      </ul>
+      <div class="foot"><button class="btn-secondary"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add episode</button><button class="link"><svg viewBox="0 0 24 24"><path d="M5 21V4h11l-2 4 2 4H5"/></svg>Report</button></div>
+      </div>
+      </div>
+    </div>
+  </template>
+  <!-- /usernode-spec-screens@1 -->
 </body>
 </html>
