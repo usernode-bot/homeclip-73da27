@@ -114,6 +114,18 @@
     @apply rounded-xl border border-line bg-surface p-4;
   }
 
+  /* Access and status chips: the VIP badge (accent, with the lock icon) and
+     the neutral chip for "Free" / "Free with ads" and statuses. */
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-small font-medium;
+  }
+  .chip-vip {
+    @apply bg-accent text-on-accent;
+  }
+  .chip-soft {
+    @apply bg-raised text-muted;
+  }
+
   /* The label above a section: sentence case, never uppercase or tracked. */
   .section-label {
     @apply mb-2 px-1 text-small font-medium text-muted;

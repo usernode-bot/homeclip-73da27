@@ -95,24 +95,36 @@ tables you've marked private), etc.
 
 ## About HomeClip
 
-Watch your homeroom's own serial drama together
-
-_(add a sentence or two more of product context here so Claude Code has a
-shared understanding of what this app is for)_
+Watch your homeroom's own serial drama together. The group adds the serial
+dramas it watches, season by season and episode by episode; everyone
+follows the shows they like, marks episodes watched and sees which episode
+comes next ("Next to watch"). Since Phase 3, episodes carry access levels —
+Free, VIP, Free with ads — and a HomeClip VIP subscription (Monthly /
+3 Months / Yearly, billed in rupiah through Stripe in sandbox mode) unlocks
+VIP episodes, skips the pre-roll ad placeholder, and is managed from the
+VIP, Manage-subscription and Payment-history pages.
 
 ## Design
 
 This app's look. The first real version fills in the blanks; every later
 change follows it, and updates it when a request changes the look on purpose.
 
-- **Palette:** _(name the accent, any second colour and the neutrals, e.g.
-  "accent: tomato red; second: basil green; neutrals: warm greys")_
-- **Signature element:** _(the one thing on screen drawn from this app's
-  subject, which no other app would have)_
+- **Palette:** the starter kit as shipped — quiet warm greys with one teal
+  accent; the token values live in `styles/tailwind-input.css`.
+- **Signature element:** episodes drawn as little TV screens — rounded
+  screens with a thick frame border, the "Next to watch" hero is the big
+  one — and the accent VIP chip with a lock icon wherever access matters.
 - **Type scale:** `text-title`, `text-heading`, `text-body`, `text-small`
   _(change their sizes in `tailwind.config.js` if you must, not their number)_
 - **One fixed look:** _(only for an app drawn as its own scene, such as a
   game: which look, and why. Otherwise delete this line.)_
+
+The kit is in `styles/tailwind-input.css`: colour tokens with a light and
+a dark value (named in `tailwind.config.js`), and a few components
+(`page-column`, `btn-primary`, `btn-secondary`, `field`, `list`, `list-row`,
+`card`, `chip`, `chip-vip`, `chip-soft`, `section-label`, `skeleton`,
+`state-empty`, `state-error`). Re-theme by changing the token values there,
+keeping every text pair at 4.5:1 or more in both looks.
 
 The kit is in `styles/tailwind-input.css`: colour tokens with a light and
 a dark value (named in `tailwind.config.js`), and a few components
@@ -142,6 +154,19 @@ Re-theme by changing the token values there, keeping every text pair at
 
 ## App-specific conventions
 
-_(optional — e.g. "all currency values stored as integer cents, not
-floats"; "the `posts` table is append-only"; "avoid adding new
-dependencies"; etc.)_
+- **Money is integer rupiah, never floats.** IDR is zero-decimal in Stripe;
+  the `subscriptions`/`payments` tables and all display use whole rupiah
+  ("Rp 59.000", dot separators, formatted by hand so the format never
+  depends on the browser's Intl data).
+- **VIP is decided on the server only.** `vipStatus()` in `server.js` reads
+  the private `subscriptions` table against `req.now`; the client renders
+  what it is given and cannot unlock anything.
+- **`subscriptions` and `payments` are `staging:private`** (financial data).
+  Staging seeds fake rows for the shots' fixture accounts only.
+- **"Now" comes from `req.now`** (already set by the platform middleware) —
+  renewal dates, expiry and coupon windows included — never `new Date()`
+  in decision code.
+- **No new runtime dependencies** for payments: Stripe goes over `fetch`
+  against its REST API; webhook signatures are verified with node `crypto`.
+  Adapters live in `providers/` (stripe implemented; midtrans/xendit are
+  structured stubs that answer 501 until built).
