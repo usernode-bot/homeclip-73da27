@@ -64,6 +64,8 @@
     { "id": "player.play", "name": "Player renders with buffering spinner", "path": "/watch/2/1", "expectSelector": "[data-spinner]", "visual": true, "impact": ["public/js/views/player.js", "styles/**", "server.js", "data/catalog.js"] },
     { "id": "player.vip-paywall", "name": "Player paywall on a VIP episode", "path": "/watch/2/9", "expectText": "This episode is for VIP", "visual": true, "impact": ["public/js/views/player.js", "server.js", "data/catalog.js", "styles/**"] },
     { "id": "art.home", "name": "Home shows original artwork", "path": "/", "expectSelector": "img[src*='/img/poster/']", "visual": true, "impact": ["public/js/art.js", "public/js/ui.js", "public/js/views/home.js", "public/img/**", "styles/**"] },
+    { "id": "home.series-row", "name": "Home Popular Series row", "path": "/?demo=1", "expectText": "Popular Series", "visual": true, "impact": ["server.js", "public/js/views/home.js", "public/js/ui.js", "public/js/art.js", "public/js/i18n.js", "styles/**"] },
+    { "name": "Home Recently Added row", "path": "/?demo=1", "expectText": "Recently Added" },
     { "name": "Discover grid shows original posters", "path": "/discover", "expectSelector": "img[src*='/img/poster/']" },
     { "name": "Drama detail shows backdrop", "path": "/drama/1", "expectSelector": ".hc-backdrop img[src*='/img/backdrop/']", "expectText": "Paper Lanterns at Dusk" },
     { "name": "Episode list shows stills", "path": "/drama/1", "expectSelector": ".hc-still img[src*='/img/still/']" },
@@ -71,7 +73,11 @@
     { "id": "posters.studio", "name": "Poster studio renders", "path": "/posters", "expectText": "Poster search", "expectSelector": "input[type='search']", "visual": true, "impact": ["public/js/views/posters.js", "public/js/views/profile.js", "public/js/router.js", "public/js/i18n.js", "server.js", "providers/**"] },
     { "name": "Home demo shows short dramas", "path": "/?demo=1", "expectText": "Short dramas" },
     { "name": "Verified demo record shows its facts", "path": "/drama/9001?demo=1", "expectText": "Original title" },
-    { "name": "Unverified record shows the neutral placeholder", "path": "/drama/9003?demo=1", "expectSelector": "img[src*='placeholder']", "expectText": "Metadata awaiting review" }
+    { "name": "Unverified record shows the neutral placeholder", "path": "/drama/9003?demo=1", "expectSelector": "img[src*='placeholder']", "expectText": "Metadata awaiting review" },
+    { "name": "Flagged demo record keeps its verified facts", "path": "/drama/9004?demo=1", "expectText": "Metadata verified", "expectSelector": "img[src*='/img/demo/poster-9004.svg']", "allowConsoleErrors": true },
+    { "id": "posters.scan", "name": "Studio artwork scan controls", "path": "/posters?demo=1", "expectText": "Check all artwork", "allowConsoleErrors": true, "visual": true, "impact": ["server.js", "public/js/views/posters.js", "public/js/i18n.js"] },
+    { "name": "Studio offers artwork replace", "path": "/posters?demo=1", "expectText": "Replace artwork" },
+    { "name": "Studio lists records without artwork", "path": "/posters?demo=1", "expectText": "No artwork yet" }
   ],
   "visibility": {
     "build": "public",

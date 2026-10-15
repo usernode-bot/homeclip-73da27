@@ -2,8 +2,8 @@
 // horizontal rows (Continue Watching, Trending Now, New Episodes, Top 10).
 
 import { api } from '../api.js';
-import { el, dramaCard, hRow, skeletonHome, errorState, icon } from '../ui.js';
-import { artImg, backdropArt, backdropFallback, lqipArt } from '../art.js';
+import { el, dramaCard, hRow, skeletonHome, errorState, icon, metaLine } from '../ui.js';
+import { artImg, bannerArt, backdropArt, backdropFallback, posterFallback, lqipArt } from '../art.js';
 import { t, genreLabel, GENRES } from '../i18n.js';
 import { navigate } from '../router.js';
 
@@ -34,8 +34,13 @@ function buildBanner(featured, container, demoParam) {
       '<a class="absolute inset-0" data-nav href="/drama/' + featured[0].id + demoParam + '" aria-label="' + featured[0].title.replace(/"/g, '&quot;') + '">' +
         '<div class="absolute inset-0">' +
           featured.map((d, i) => {
-            const src = backdropArt(d) || backdropFallback(d);
-            const fb = backdropArt(d) ? backdropFallback(d) : '';
+            // Record art first: the backdrop when the record carries one,
+            // otherwise its own poster (cover-cropped into the 16:9 frame).
+            // The fallback for a FAILED image follows the same record chain.
+            const src = bannerArt(d) || backdropFallback(d);
+            const fb = bannerArt(d)
+              ? (backdropArt(d) ? backdropFallback(d) : posterFallback(d))
+              : '';
             const lqip = lqipArt(d, 'b');
             return '<img src="' + src + '" alt="" loading="lazy" decoding="async" data-art' +
               (fb ? ' data-fallback="' + fb + '"' : '') +
@@ -46,7 +51,7 @@ function buildBanner(featured, container, demoParam) {
         '</div>' +
       '</a>' +
       '<div class="hc-banner-text">' +
-        '<p class="text-small text-muted" data-b-meta>' + featured[0].year + ' · ' + featured[0].genres.map(genreLabel).join(', ') + '</p>' +
+        '<p class="text-small text-muted" data-b-meta>' + metaLine(featured[0]) + '</p>' +
         '<p class="text-heading" data-b-title>' + featured[0].title + '</p>' +
       '</div>' +
       '<div class="absolute right-3 top-3 flex gap-1" data-b-dots>' +
@@ -73,7 +78,7 @@ function buildBanner(featured, container, demoParam) {
     });
     dots.forEach((dot, k) => dot.classList.toggle('is-active', k === i));
     title.textContent = featured[i].title;
-    meta.textContent = featured[i].year + ' · ' + featured[i].genres.map(genreLabel).join(', ');
+    meta.textContent = metaLine(featured[i]);
     const href = '/drama/' + featured[i].id + demoParam;
     link.setAttribute('href', href);
     link.setAttribute('aria-label', featured[i].title.replace(/"/g, '&quot;'));
@@ -124,7 +129,7 @@ function buildSearch(container, demoParam) {
                 '<span class="block h-14 w-10 shrink-0 overflow-hidden rounded-md bg-raised" style="aspect-ratio:2/3">' +
                   artImg(d, { cls: 'h-full w-full object-cover', lqip: false }) + '</span>' +
                 '<span class="min-w-0"><span class="block truncate text-small font-medium text-fg">' + d.title + '</span>' +
-                '<span class="block truncate text-small text-muted">' + d.year + ' · ' + d.genres.map(genreLabel).join(', ') + '</span></span>' +
+                '<span class="block truncate text-small text-muted">' + metaLine(d) + '</span></span>' +
               '</button>'
             );
             item.addEventListener('click', () => { hide(); input.value = ''; navigate('/drama/' + d.id + demoParam); });
@@ -196,12 +201,20 @@ export async function render({ view, query }) {
     ));
   }
   view.appendChild(hRow(t('home.trending'), data.trending.map((d) => dramaCard(d, { href: hrefD(d) }))));
-  view.appendChild(hRow(t('home.new'), data.newEpisodes.map((d) => dramaCard(d, { href: hrefD(d) }))));
+  // Popular Series: the catalog's series, most popular first — the shorts'
+  // counterpart row. Hidden when the catalog has none, like the shorts row.
+  const seriesRow = (data.series || []).filter(Boolean);
+  if (seriesRow.length) {
+    view.appendChild(hRow(t('home.series'), seriesRow.map((d) => dramaCard(d, { href: hrefD(d) }))));
+  }
   // Short dramas: a row of their own, only when the catalog has any —
   // never an empty row.
   const shortRow = (data.shortDramas || []).filter(Boolean);
   if (shortRow.length) {
     view.appendChild(hRow(t('home.short'), shortRow.map((d) => dramaCard(d, { href: hrefD(d) }))));
   }
+  // Recently Added: the newest catalog entries first, so a drama a curator
+  // just imported leads the row.
+  view.appendChild(hRow(t('home.recent'), (data.recent || []).map((d) => dramaCard(d, { href: hrefD(d) }))));
   view.appendChild(hRow(t('home.top10'), data.top10.map((d, i) => dramaCard(d, { rank: i + 1, href: hrefD(d) }))));
 }

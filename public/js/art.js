@@ -81,6 +81,14 @@ export function backdropArt(d) {
   return p ? '/img/backdrop/' + p + '.webp' : null;
 }
 
+// Banner art: a wide backdrop when the record carries one, otherwise the
+// record's own poster — cover-cropped into the banner's 16:9 frame — so a
+// verified record with only a poster still fills the hero with its own art.
+// Callers keep the generated-art / placeholder fallback for a FAILED image.
+export function bannerArt(d) {
+  return backdropArt(d) || posterArt(d, 600);
+}
+
 // First fallback for a FAILED image: committed art falls to the generated
 // gradient art (titled correctly), record-driven art falls to the neutral
 // placeholder — never to an unrelated photo.
