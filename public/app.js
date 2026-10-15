@@ -610,7 +610,7 @@
       '<div class="state-error"><div class="text-body font-semibold">' + esc(i18n.t('drama_error_title')) + '</div>' +
       '<p class="text-small" style="color:rgb(var(--muted))">' + esc(i18n.t('state_error_body')) + '</p>' +
       '<button id="retry-drama" class="btn-secondary">' + esc(i18n.t('retry')) + '</button></div>';
-    $('retry-drama').addEventListener('click', function () { loadDrama(currentDramaId); });
+    $('retry-drama').addEventListener('click', loadDramaAgain);
   }
 
   function seasonProgressHtml(eps) {
@@ -718,7 +718,7 @@
           folBtn.className = r.following ? 'fol' : 'btn-secondary';
         })
         .catch(function (err) {
-          if (err.status !== 401) loadDrama(currentDramaId);
+          if (err.status !== 401) loadDramaAgain();
         });
     };
     $('report-drama-btn').onclick = function () {
@@ -804,12 +804,16 @@
   }
 
   function loadDramaAgain() {
-    loadDrama(currentDramaId);
+    // Whatever route opened the drama re-opens it: by slug or by id.
+    if (currentDramaSlug) loadSlugDrama(currentDramaSlug);
+    else loadDrama(currentDramaId);
   }
 
   var currentDramaId = null;
+  var currentDramaSlug = null; // set when the drama was opened by slug
   function loadDrama(id) {
     currentDramaId = id;
+    currentDramaSlug = null;
     var token = ++dramaLoad;
     currentSeason = null;
     renderDramaSkeleton();
@@ -823,6 +827,77 @@
     }).catch(function (err) {
       if (token !== dramaLoad) return;
       var cached = readJSON(cacheKey('drama:' + id), null);
+      if (cached) { renderDrama(cached); offlineBanner(true); return; }
+      renderDramaError();
+    });
+  }
+
+  // The Phase-2 slug route (/dramas/:slug, the share form) answers the
+  // Phase-2 shape. Adapt it into the shape renderDrama draws, so one screen
+  // serves both routes. The slug payload has no reviews and no media_url
+  // (a slug-drama episode's watch_url opens in a new tab); legacy dramas
+  // reached by slug keep their editorial fields when the row carries them.
+  function slugDramaData(raw) {
+    var d = (raw.drama || {});
+    var seasonNo = {};
+    (raw.seasons || []).forEach(function (s) { seasonNo[s.id] = s.number; });
+    var watches = (raw.viewer && raw.viewer.watches) || {};
+    var whoElse = raw.whoElse || {};
+    var episodes = (raw.episodes || []).map(function (e) {
+      var w = watches[e.id];
+      return {
+        id: e.id,
+        season: seasonNo[e.season_id] || 1,
+        number: e.number,
+        title: e.title,
+        minutes: e.duration_seconds ? Math.round(e.duration_seconds / 60) : 0,
+        watch_url: e.watch_url || '',
+        media_url: '',
+        subtitle_url: '',
+        access: 'free',
+        watched_by: whoElse[e.id] || [],
+        viewer_watched: Boolean(w && w.completed),
+      };
+    });
+    return {
+      drama: {
+        id: d.id,
+        title: d.title,
+        synopsis: d.synopsis || d.summary || '',
+        added_by_username: d.added_by_username || d.addedBy || '',
+        poster_url: d.poster_url || '',
+        genres: d.genres || (raw.genres || []).join(', '),
+        country: d.country || '',
+        year: d.year || null,
+        rating: d.rating != null ? d.rating : null,
+        cast_list: d.cast_list || (raw.cast || []).map(function (c) { return c.name; }).join(', '),
+        mine: false,
+      },
+      seasons: (raw.seasons || []).map(function (s) { return s.number; }),
+      episodes: episodes,
+      following: Boolean(raw.viewer && raw.viewer.following),
+      reviews: [],
+      reviews_cursor: null,
+      my_review: null,
+    };
+  }
+
+  function loadSlugDrama(slug) {
+    currentDramaSlug = slug;
+    currentDramaId = null;
+    var token = ++dramaLoad;
+    currentSeason = null;
+    renderDramaSkeleton();
+    var dramaP = api('dramas/' + slug);
+    Promise.all([mePromise, dramaP]).then(function (results) {
+      var data = slugDramaData(results[1]);
+      if (token !== dramaLoad) return;
+      writeJSON(cacheKey('drama-slug:' + slug), data);
+      offlineBanner(false);
+      renderDrama(data);
+    }).catch(function (err) {
+      if (token !== dramaLoad) return;
+      var cached = readJSON(cacheKey('drama-slug:' + slug), null);
       if (cached) { renderDrama(cached); offlineBanner(true); return; }
       renderDramaError();
     });
@@ -1694,12 +1769,16 @@
   // (#/drama/:id, #/watch/:id, #/downloads). A hash navigation wins over
   // the entry path and resets the path to /, so the two never disagree.
 
+  // The screens are one at a time; every show* hides the rest through this
+  // helper.
+  var VIEWS = ['view-home', 'view-drama', 'view-watch', 'view-downloads',
+               'view-vip', 'view-search', 'view-profiles'];
+  function showView(id) {
+    VIEWS.forEach(function (v) { $(v).hidden = v !== id; });
+  }
+
   function showHome() {
-    $('view-home').hidden = false;
-    $('view-drama').hidden = true;
-    $('view-watch').hidden = true;
-    $('view-downloads').hidden = true;
-    $('view-vip').hidden = true;
+    showView('view-home');
     document.title = i18n.t('title_home');
     hideSheet();
     track('screen_view', { screen: 'home' });
@@ -1707,11 +1786,7 @@
     loadHome();
   }
   function showDrama(id, episodeId) {
-    $('view-home').hidden = true;
-    $('view-drama').hidden = false;
-    $('view-watch').hidden = true;
-    $('view-downloads').hidden = true;
-    $('view-vip').hidden = true;
+    showView('view-drama');
     hideSheet();
     track('screen_view', { screen: 'drama', drama_id: Number(id) });
     // A shared episode link (#/drama/:id?ep=:episodeId) opens that episode's
@@ -1720,34 +1795,52 @@
     loadDrama(id);
   }
   function showVip(sub) {
-    $('view-home').hidden = true;
-    $('view-drama').hidden = true;
-    $('view-watch').hidden = true;
-    $('view-downloads').hidden = true;
-    $('view-vip').hidden = false;
+    showView('view-vip');
     hideSheet();
     loadVip(sub === 'return' ? 'ret' : (sub || 'vip'));
   }
   function showWatch(id) {
-    $('view-home').hidden = true;
-    $('view-drama').hidden = true;
-    $('view-watch').hidden = false;
-    $('view-downloads').hidden = true;
-    $('view-vip').hidden = true;
+    showView('view-watch');
     hideSheet();
     track('screen_view', { screen: 'watch', episode_id: Number(id) });
     loadWatch(id);
   }
   function showDownloads() {
-    $('view-home').hidden = true;
-    $('view-drama').hidden = true;
-    $('view-watch').hidden = true;
-    $('view-downloads').hidden = false;
-    $('view-vip').hidden = true;
+    showView('view-downloads');
     document.title = i18n.t('title_downloads');
     hideSheet();
     track('screen_view', { screen: 'downloads' });
     loadDownloads();
+  }
+  function showSearch() {
+    showView('view-search');
+    document.title = i18n.t('title_search');
+    hideSheet();
+    track('screen_view', { screen: 'search' });
+    loadSearch();
+  }
+  function showProfiles() {
+    showView('view-profiles');
+    document.title = i18n.t('title_profiles');
+    hideSheet();
+    track('screen_view', { screen: 'profiles' });
+    loadProfiles();
+  }
+  // /add is the Add drama sheet over the home screen: the home feed loads
+  // behind it, so closing the sheet leaves a real screen.
+  function showAdd() {
+    showView('view-home');
+    document.title = i18n.t('title_home');
+    hideSheet();
+    track('screen_view', { screen: 'add' });
+    loadHome();
+    openAddDrama();
+  }
+  function showSlugDrama(slug) {
+    showView('view-drama');
+    hideSheet();
+    track('screen_view', { screen: 'drama', drama_slug: slug });
+    loadSlugDrama(slug);
   }
 
   function loadWatch(id) {
@@ -1805,6 +1898,211 @@
     $('retry-watch').addEventListener('click', function () { showWatch(id); });
   }
 
+  // ── Search ──────────────────────────────────────────────────────────────
+  // The field lives in index.html (input[data-search]); the results render
+  // here as the feed's rows, one drama per row. A deep link (/search?q=…)
+  // runs its query on open.
+
+  var searchLoad = 0;
+  var searchTimer = null;
+
+  function searchQuery() {
+    var h = location.hash || '';
+    var qi = h.indexOf('?');
+    var q = new URLSearchParams(qi > -1 ? h.slice(qi + 1) : '').get('q');
+    if (!q && location.pathname === '/search') {
+      q = new URLSearchParams(location.search).get('q');
+    }
+    return (q || '').trim();
+  }
+
+  function loadSearch() {
+    var q = searchQuery();
+    var input = $('search-input');
+    if (q && input.value !== q) input.value = q;
+    if (q) runSearch(q);
+    else renderSearchIntro();
+  }
+
+  function renderSearchIntro() {
+    var state = $('search-state');
+    var list = $('search-results');
+    list.hidden = true;
+    list.innerHTML = '';
+    state.hidden = false;
+    state.innerHTML =
+      '<div class="state-empty"><div class="text-heading">' + esc(i18n.t('search_prompt_title')) + '</div>' +
+      '<p class="text-small" style="color:rgb(var(--muted))">' + esc(i18n.t('search_prompt_body')) + '</p></div>';
+  }
+
+  function searchRowHtml(d) {
+    var poster = '<span class="poster" style="background:' + posterColor(d.id) + ';display:block" aria-hidden="true"></span>';
+    var openLabel = i18n.t('open_drama', { title: d.title });
+    return '<li class="list-row">' + poster +
+      '<a class="grow" href="#/drama/' + d.id + '" style="text-decoration:none;color:inherit" aria-label="' + esc(openLabel) + '">' +
+      '<div style="font-weight:600">' + esc(d.title) + '</div>' +
+      (d.summary ? '<div class="sm muted">' + esc(d.summary) + '</div>' : '') + '</a></li>';
+  }
+
+  function runSearch(q) {
+    var token = ++searchLoad;
+    var state = $('search-state');
+    var list = $('search-results');
+    state.hidden = false;
+    state.innerHTML =
+      '<ul class="list">' +
+      '<li class="list-row"><span class="skeleton" style="width:56px;height:84px;border-radius:8px;flex:none"></span>' +
+      '<div class="grow" style="display:flex;flex-direction:column;gap:6px"><div class="skeleton" style="height:12px;width:45%"></div><div class="skeleton" style="height:12px;width:70%"></div></div></li>' +
+      '</ul>';
+    list.hidden = true;
+    list.innerHTML = '';
+    api('search?q=' + encodeURIComponent(q)).then(function (data) {
+      if (token !== searchLoad) return;
+      state.hidden = true;
+      state.innerHTML = '';
+      list.hidden = false;
+      if (!(data.dramas || []).length) {
+        list.hidden = true;
+        state.hidden = false;
+        state.innerHTML =
+          '<div class="state-empty"><div class="text-heading">' + esc(i18n.t('search_empty_title')) + '</div>' +
+          '<p class="text-small" style="color:rgb(var(--muted))">' + esc(i18n.t('search_empty_body')) + '</p>' +
+          '<a class="btn-secondary" href="#/add" style="text-decoration:none">' + esc(i18n.t('add_drama')) + '</a></div>';
+        return;
+      }
+      list.innerHTML = data.dramas.map(searchRowHtml).join('');
+    }).catch(function () {
+      if (token !== searchLoad) return;
+      list.hidden = true;
+      state.hidden = false;
+      state.innerHTML =
+        '<div class="state-error"><div class="text-body font-semibold">' + esc(i18n.t('search_error_title')) + '</div>' +
+        '<p class="text-small" style="color:rgb(var(--muted))">' + esc(i18n.t('state_error_body')) + '</p>' +
+        '<button id="retry-search" class="btn-secondary">' + esc(i18n.t('retry')) + '</button></div>';
+      $('retry-search').addEventListener('click', function () { runSearch(q); });
+    });
+  }
+
+  // ── Profiles ────────────────────────────────────────────────────────────
+  // Who is watching: the account, its profiles (per-profile follows and
+  // watches read the x-homeclip-profile header), and the form that creates
+  // the first one. Everything renders here; the words come from i18n.
+
+  function profilesError() {
+    $('profiles-body').hidden = true;
+    var state = $('profiles-state');
+    state.hidden = false;
+    state.innerHTML =
+      '<div class="state-error"><div class="text-body font-semibold">' + esc(i18n.t('profiles_error_title')) + '</div>' +
+      '<p class="text-small" style="color:rgb(var(--muted))">' + esc(i18n.t('state_error_body')) + '</p>' +
+      '<button id="retry-profiles" class="btn-secondary">' + esc(i18n.t('retry')) + '</button></div>';
+    $('retry-profiles').addEventListener('click', showProfiles);
+  }
+
+  function profileFormHtml(p, first) {
+    p = p || { id: '', name: '', is_kids: false };
+    return '<form' + (first ? ' data-first' : '') + ' data-profile-form="' + (p.id || 'new') + '"' +
+      ' style="display:flex;flex-direction:column;gap:10px;margin-top:12px">' +
+      '<input class="field" data-profile-id="' + p.id + '" value="' + esc(p.name) + '" maxlength="40"' +
+      ' aria-label="' + esc(i18n.t('profile_name_label')) + '" data-i18n-ph="ph_profile_name" placeholder="e.g. Sari" autocomplete="off">' +
+      '<label style="display:flex;align-items:center;gap:8px;min-height:44px">' +
+      '<input type="checkbox" data-kids' + (p.is_kids ? ' checked' : '') + '>' +
+      '<span class="sm">' + esc(i18n.t('profiles_kids')) + '</span></label>' +
+      '<div style="display:flex;gap:8px">' +
+      '<button type="submit" class="btn-primary">' + esc(i18n.t(p.id ? 'profiles_save' : 'profiles_create')) + '</button>' +
+      '<button type="button" class="btn-secondary" data-cancel-profile>' + esc(i18n.t('cancel')) + '</button>' +
+      (p.id ? '<button type="button" class="btn-secondary" data-delete-profile="' + p.id + '">' + esc(i18n.t('delete')) + '</button>' : '') +
+      '</div></form>';
+  }
+
+  function renderProfiles(me) {
+    var body = $('profiles-body');
+    var state = $('profiles-state');
+    state.hidden = true;
+    state.innerHTML = '';
+    body.hidden = false;
+    if (!me.user) {
+      body.innerHTML =
+        '<div class="state-empty"><div class="text-heading">' + esc(i18n.t('downloads_vip_title')) + '</div>' +
+        '<p class="text-small" style="color:rgb(var(--muted))">' + esc(i18n.t('account_needed_title')) + '</p>' +
+        '<button id="profiles-account" class="btn-primary">' + esc(i18n.t('account_needed_title')) + '</button></div>';
+      $('profiles-account').addEventListener('click', function () {
+        try { window.usernode.askForAccount({ action: i18n.t('profiles_title').toLowerCase() }); } catch (e) {}
+      });
+      return;
+    }
+    var profiles = me.profiles || [];
+    var initial = (me.account && me.account.username || '?').charAt(0).toUpperCase();
+    var rows = '<li class="list-row"><span class="avatar">' + esc(initial) + '</span>' +
+      '<div class="grow"><div style="font-weight:600">' + esc(me.account.username) + '</div>' +
+      '<div class="sm muted">' + esc(i18n.t('profiles_you')) + '</div></div></li>' +
+      profiles.map(function (p) {
+        return '<li class="list-row" data-profile-row="' + p.id + '">' +
+          '<span class="avatar avatar-sm">' + esc(p.name.charAt(0)) + '</span>' +
+          '<div class="grow"><div style="font-weight:600">' + esc(p.name) + '</div>' +
+          (p.is_kids ? '<span class="chip">' + esc(i18n.t('profiles_kids')) + '</span>' : '') + '</div>' +
+          '<button class="btn-secondary" data-edit-profile="' + p.id + '">' + esc(i18n.t('profiles_edit')) + '</button></li>';
+      }).join('');
+    // The create form sits outside the list: a form is not a list row.
+    body.innerHTML = '<h1 class="title">' + esc(i18n.t('profiles_title')) + '</h1>' +
+      '<ul class="list" style="margin-top:12px">' + rows + '</ul>' +
+      profileFormHtml(null, !profiles.length);
+    wireProfiles(me, profiles);
+  }
+
+  function wireProfiles(me, profiles) {
+    var body = $('profiles-body');
+    var editing = null;
+    function refetch() {
+      api('me').then(function (fresh) {
+        renderProfiles(fresh);
+      }).catch(profilesError);
+    }
+    body.onsubmit = function (ev) {
+      ev.preventDefault();
+      var form = ev.target;
+      var isNew = form.getAttribute('data-profile-form') === 'new';
+      var input = form.querySelector('input[data-profile-id]');
+      var payload = {
+        name: input.value,
+        isKids: form.querySelector('[data-kids]').checked,
+      };
+      var call = isNew
+        ? api('profiles', { method: 'POST', body: payload })
+        : api('profiles/' + input.getAttribute('data-profile-id'), { method: 'PATCH', body: payload });
+      call.then(refetch).catch(function (err) {
+        toast(err.message || i18n.t('state_error_body'));
+      });
+    };
+    body.onclick = function (ev) {
+      var btn = ev.target.closest ? ev.target.closest('[data-edit-profile],[data-cancel-profile],[data-delete-profile]') : null;
+      if (!btn) return;
+      if (btn.hasAttribute('data-cancel-profile')) { refetch(); return; }
+      if (btn.hasAttribute('data-delete-profile')) {
+        var p = profiles.filter(function (x) { return String(x.id) === btn.getAttribute('data-delete-profile'); })[0];
+        if (!p || !window.confirm(i18n.t('profiles_delete_confirm', { name: p.name }))) return;
+        api('profiles/' + p.id, { method: 'DELETE' }).then(refetch)
+          .catch(function (err) { toast(err.message || i18n.t('state_error_body')); });
+        return;
+      }
+      // Edit: the row's content becomes its form, name input carrying the
+      // profile id.
+      var id = btn.getAttribute('data-edit-profile');
+      var p = profiles.filter(function (x) { return String(x.id) === String(id); })[0];
+      if (!p || editing === id) return;
+      editing = id;
+      var row = body.querySelector('[data-profile-row="' + id + '"]');
+      row.innerHTML = '<span class="avatar avatar-sm">' + esc(p.name.charAt(0)) + '</span>' + profileFormHtml(p);
+      var input = row.querySelector('input[data-profile-id]');
+      input.value = p.name;
+      input.focus();
+    };
+  }
+
+  function loadProfiles() {
+    mePromise.then(renderProfiles).catch(profilesError);
+  }
+
   function resolveRoute() {
     var hash = location.hash || '#/';
     var m;
@@ -1822,8 +2120,22 @@
       history.replaceState(null, '', '/');
       return ['downloads'];
     }
+    // Search, profiles and the Add drama sheet, in hash form.
+    if ((m = hash.match(/^#\/(search|profiles|add)(?:\?.*)?\/?$/))) {
+      history.replaceState(null, '', location.pathname === '/search' ? location.pathname + location.search : '/');
+      return [m[1]];
+    }
+    // A drama addressed by slug (the Phase-2 share form).
+    if ((m = hash.match(/^#\/dramas\/([a-z0-9-]+)\/?$/))) {
+      history.replaceState(null, '', '/');
+      return ['drama-slug', m[1]];
+    }
     if ((m = location.pathname.match(/^\/watch\/(\d+)$/))) return ['watch', m[1]];
     if ((m = location.pathname.match(/^\/drama\/(\d+)$/))) return ['drama', m[1]];
+    // A deep link like /search?q=harbour: the query stays on the path so
+    // loadSearch can pick it up.
+    if ((m = location.pathname.match(/^\/(search|profiles|add)\/?$/))) return [m[1]];
+    if ((m = location.pathname.match(/^\/dramas\/([a-z0-9-]+)\/?$/))) return ['drama-slug', m[1]];
     if (location.pathname === '/downloads') return ['downloads'];
     if ((m = location.pathname.match(/^\/vip(?:\/(manage|payments|return))?\/?$/))) return ['vip', m[1]];
     return ['home'];
@@ -1840,8 +2152,12 @@
     window.scrollTo(0, 0);
     if (r[0] === 'watch') showWatch(r[1]);
     else if (r[0] === 'drama') showDrama(r[1], r[2]);
+    else if (r[0] === 'drama-slug') showSlugDrama(r[1]);
     else if (r[0] === 'downloads') showDownloads();
     else if (r[0] === 'vip') showVip(r[1]);
+    else if (r[0] === 'search') showSearch();
+    else if (r[0] === 'profiles') showProfiles();
+    else if (r[0] === 'add') showAdd();
     else showHome();
   }
   window.addEventListener('hashchange', route);
@@ -1855,6 +2171,26 @@
   });
   $('dl-back').addEventListener('click', function () {
     location.hash = '#/';
+  });
+  $('search-back').addEventListener('click', function () {
+    location.hash = '#/';
+  });
+  $('profiles-back').addEventListener('click', function () {
+    location.hash = '#/';
+  });
+  // Search: Enter (the form's submit) runs the query at once; typing runs
+  // it after a short pause. An empty field returns to the intro.
+  $('search-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var q = $('search-input').value.trim();
+    if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
+    if (q) runSearch(q); else renderSearchIntro();
+  });
+  $('search-input').addEventListener('input', function () {
+    var q = this.value.trim();
+    if (searchTimer) clearTimeout(searchTimer);
+    if (!q) { searchTimer = null; renderSearchIntro(); return; }
+    searchTimer = setTimeout(function () { runSearch(q); }, 300);
   });
 
   // ── Boot ────────────────────────────────────────────────────────────────

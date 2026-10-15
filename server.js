@@ -1532,7 +1532,7 @@ app.get('/api/feed', async (req, res) => {
     const demo = demoOn(req);
     const viewerId = req.user ? req.user.id : null;
     const viewerName = req.user ? req.user.username : null;
-    const vip = (await vipStatus(req)).vip;
+    const vip = await viewerIsVip(req);
     // Dramas newest first.
     const dramas = await pool.query(
       `SELECT id, title, synopsis, added_by_id, added_by_username, created_at,
@@ -1778,7 +1778,7 @@ app.delete('/api/dramas/:id', async (req, res) => {
 app.get('/api/dramas/:id', async (req, res) => {
   try {
     const viewerId = req.user ? req.user.id : null;
-    const vip = (await vipStatus(req)).vip;
+    const vip = await viewerIsVip(req);
     const d = await pool.query(
       `SELECT id, title, synopsis, added_by_id, added_by_username, created_at,
               year, country, genres, rating, cast_list, poster_url
@@ -1957,7 +1957,7 @@ app.put('/api/episodes/:id/watched', async (req, res) => {
     const e = await pool.query(`SELECT id, access FROM episodes WHERE id = $1`, [req.params.id]);
     if (!e.rows.length) return res.status(404).json({ error: 'Episode not found' });
     // Server-side paywall: the write is refused and the answer explains why.
-    if (e.rows[0].access === 'vip' && !(await vipStatus(req)).vip) {
+    if (e.rows[0].access === 'vip' && !(await viewerIsVip(req))) {
       return res.status(403).json({ error: 'vip_required' });
     }
     await pool.query(

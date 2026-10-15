@@ -289,6 +289,11 @@ module.exports = function registerApi(app, pool, { isStaging }) {
       `SELECT id, name, avatar_url, language, is_kids, created_at
        FROM profiles WHERE account_id = $1 ORDER BY id`, [req.user.id]);
     res.json({
+      // One merged answer: the live client (public/app.js) reads the
+      // Phase-1 shape (user + guest); the profiles screens read
+      // account + profiles.
+      user: { id: req.user.id, username: req.user.username },
+      guest: false,
       account: { id: req.user.id, username: req.user.username, locale: req.user.locale || null },
       profiles: profiles.rows,
     });
@@ -431,7 +436,11 @@ module.exports = function registerApi(app, pool, { isStaging }) {
     });
   });
 
-  app.get('/api/dramas/:slug', async (req, res) => {
+  app.get('/api/dramas/:slug', async (req, res, next) => {
+    // Phase-1 routes address dramas by numeric id (the hash routes
+    // #/drama/900001 and their path forms); only slugs resolve here.
+    // Defer numeric ids to the Phase-1 route in server.js.
+    if (/^\d+$/.test(String(req.params.slug))) return next();
     const ctx = await getProfile(req);
     const profile = ctx && ctx.profile;
     const drama = (await pool.query(
@@ -458,6 +467,15 @@ module.exports = function registerApi(app, pool, { isStaging }) {
        WHERE dc.drama_id = $1 ORDER BY cm.name`, [drama.id])).rows;
     let viewer = null;
     let whoElse = {};
+    // The live app's follow button writes the legacy user-keyed follows
+    // (server.js), so the slug route counts those too when there is no
+    // profile context — the button then reads back what it wrote.
+    let legacyFollowing = false;
+    if (req.user) {
+      legacyFollowing = (await pool.query(
+        `SELECT 1 FROM follows_legacy WHERE user_id = $1 AND drama_id = $2`,
+        [req.user.id, drama.id])).rows.length > 0;
+    }
     if (profile) {
       const [follow, listed, rating, watches, avg] = await Promise.all([
         pool.query(`SELECT 1 FROM follows WHERE profile_id = $1 AND drama_id = $2`,
@@ -479,7 +497,7 @@ module.exports = function registerApi(app, pool, { isStaging }) {
         positionSeconds: r.position_seconds, completed: r.completed,
       }]));
       viewer = {
-        following: follow.rows.length > 0,
+        following: follow.rows.length > 0 || legacyFollowing,
         inList: listed.rows.length > 0,
         myStars: rating.rows.length ? rating.rows[0].stars : null,
         watches: Object.fromEntries(mine),
@@ -497,6 +515,11 @@ module.exports = function registerApi(app, pool, { isStaging }) {
         const list = whoElse[r.episode_id] || (whoElse[r.episode_id] = []);
         if (list.length < 3) list.push(r.name);
       }
+    } else if (req.user) {
+      // No profile yet: the follow state still comes from the legacy
+      // table, so the follow button reads back what it wrote.
+      viewer = { following: legacyFollowing, inList: false, myStars: null,
+                 watches: {}, groupAverage: null, groupRatingCount: 0 };
     }
     res.json({
       drama: {
@@ -508,8 +531,18 @@ module.exports = function registerApi(app, pool, { isStaging }) {
     });
   });
 
-  app.post('/api/dramas', async (req, res) => {
+  app.post('/api/dramas', async (req, res, next) => {
     const body = req.body || {};
+    // The Phase-1 "Add a drama" sheet posts the legacy shape (synopsis,
+    // year, country, rating, poster_url); those go to the Phase-1 route
+    // in server.js. Only the new form's shape (summary / maturity /
+    // genres array / cast) creates a drama here.
+    const legacyShape = body.synopsis !== undefined || body.year !== undefined
+      || body.country !== undefined || body.rating !== undefined
+      || body.poster_url !== undefined;
+    const newShape = body.summary !== undefined || body.maturity !== undefined
+      || body.cast !== undefined || Array.isArray(body.genres);
+    if (legacyShape || !newShape) return next();
     const title = String(body.title || '').trim().slice(0, 80);
     if (!title) return bad(res, 400, 'bad_request');
     const maturity = body.maturity === 'mature' ? 'mature' : 'all';
@@ -549,7 +582,10 @@ module.exports = function registerApi(app, pool, { isStaging }) {
     res.status(201).json({ drama: created.rows[0] });
   });
 
-  app.post('/api/dramas/:slug/episodes', async (req, res) => {
+  app.post('/api/dramas/:slug/episodes', async (req, res, next) => {
+    // Numeric ids belong to the Phase-1 episodes route (server.js), like
+    // the GET above.
+    if (/^\d+$/.test(String(req.params.slug))) return next();
     const drama = (await pool.query(
       `SELECT * FROM dramas WHERE slug = $1`, [req.params.slug])).rows[0];
     if (!drama) return bad(res, 404, 'not_found');

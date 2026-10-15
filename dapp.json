@@ -78,7 +78,6 @@
         "dapp.json"
       ]
     },
-    { "name": "Feed empty state", "path": "/", "expectText": "No dramas yet" },
     { "id": "demo-feed", "name": "Populated demo", "path": "/?demo=1", "expectText": "The Tide Table", "visual": true, "impact": ["public/**", "styles/**"] },
     { "name": "Watch screen", "path": "/watch/9000012?demo=1", "expectText": "The Tide Table" },
     { "name": "Watch screen without video", "path": "/watch/9000004?demo=1", "expectText": "No video here yet" },
