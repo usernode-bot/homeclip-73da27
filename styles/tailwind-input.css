@@ -53,6 +53,11 @@
   [hidden]:where(:not([hidden="until-found"])) {
     display: none !important;
   }
+  /* The page keeps room above the fixed tab bar (56 px + border) and any
+     home-indicator inset, so the last row is never covered. */
+  #hc-view {
+    padding-bottom: calc(5.5rem + var(--un-safe-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  }
 }
 
 /* ── Components ───────────────────────────────────────────────────────────
@@ -200,14 +205,17 @@
     @apply fixed inset-x-0 bottom-0 z-40 mx-auto flex max-w-2xl border-t border-line bg-surface;
     padding-bottom: var(--un-safe-inset-bottom, env(safe-area-inset-bottom, 0px));
   }
-  .hc-tabbar button {
-    @apply flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 px-1 text-small text-muted
+  .hc-tabbar button,
+  .hc-tabbar a {
+    @apply flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 px-1 text-small text-muted no-underline
       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus;
   }
-  .hc-tabbar button.is-active {
+  .hc-tabbar button.is-active,
+  .hc-tabbar a.is-active {
     @apply text-accent;
   }
-  .hc-tabbar button svg {
+  .hc-tabbar button svg,
+  .hc-tabbar a svg {
     @apply h-6 w-6;
   }
 
