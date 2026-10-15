@@ -104,6 +104,10 @@ const STRINGS = {
 
     'demo.note': 'Staging demo',
 
+    'notfound.title': 'Page not found',
+    'notfound.body': 'This page does not exist. Check the link, or head back Home.',
+    'notfound.home': 'Back to Home',
+
     'profiles.title': 'Profiles',
     'profiles.rowDesc': "Who's watching",
     'profiles.who': "Who's watching?",
@@ -253,6 +257,10 @@ const STRINGS = {
     'player.lastEp': 'Ini episode terakhir.',
 
     'demo.note': 'Demo staging',
+
+    'notfound.title': 'Halaman tidak ditemukan',
+    'notfound.body': 'Halaman ini tidak ada. Periksa tautannya, atau kembali ke Beranda.',
+    'notfound.home': 'Kembali ke Beranda',
 
     'profiles.title': 'Profil Penonton',
     'profiles.rowDesc': 'Siapa yang menonton',

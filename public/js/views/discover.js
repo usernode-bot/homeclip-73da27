@@ -5,6 +5,12 @@ import { api } from '../api.js';
 import { el, dramaCard, skeletonGrid, errorState, emptyState, toast } from '../ui.js';
 import { t, genreLabel, countryLabel, countLabel, GENRES } from '../i18n.js';
 
+let searchDebounce = null;
+
+export function unmount() {
+  if (searchDebounce) { clearTimeout(searchDebounce); searchDebounce = null; }
+}
+
 function stateFromQuery(query) {
   return {
     genre: query.get('genre') || '',
@@ -59,6 +65,22 @@ export async function render({ view, query }) {
       '<h1 class="text-title">' + t('discover.title') + '</h1>' +
     '</div>'
   ));
+
+  // Search: same field as Home's, feeding the query the grid already reads.
+  // Debounced so typing narrows the grid without a request per keystroke.
+  const searchWrap = el(
+    '<div class="mb-4">' +
+      '<input class="field" type="search" name="q" autocomplete="off" ' +
+        'placeholder="' + t('home.search') + '" aria-label="' + t('home.search') + '">' +
+    '</div>'
+  );
+  const searchInput = searchWrap.querySelector('input');
+  searchInput.value = state.q;
+  searchInput.addEventListener('input', () => {
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => setState({ q: searchInput.value.trim() }), 250);
+  });
+  view.appendChild(searchWrap);
 
   const sortSeg = el(
     '<div class="hc-segment mb-4" role="group" aria-label="' + t('discover.sort') + '">' +
@@ -126,7 +148,10 @@ export async function render({ view, query }) {
       if (result.total === 0) {
         const box = emptyState(t('discover.empty'), '');
         const clear = el('<button type="button" class="btn-secondary mt-2">' + t('discover.clear') + '</button>');
-        clear.addEventListener('click', () => setState({ genre: '', country: '', year: '' }));
+        clear.addEventListener('click', () => {
+          searchInput.value = '';
+          setState({ genre: '', country: '', year: '', q: '' });
+        });
         box.appendChild(clear);
         grid.appendChild(box);
         count.textContent = '';
