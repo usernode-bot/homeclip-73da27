@@ -833,14 +833,20 @@
   function loadWatch(id) {
     // Lazily loaded: the player's module and, only when an episode actually
     // streams HLS, hls.js under it. The first load never fetches either.
-    ensureScript('watch.js').then(function () {
+    // Identity and VIP settle first: both views read HC.viewer(), and at
+    // boot they open before /api/me and /api/subscription have answered.
+    Promise.all([mePromise, subPromise]).then(function () {
+      return ensureScript('watch.js');
+    }).then(function () {
       window.HCWatch.show(id);
     }).catch(function () {
       renderWatchShellError(id);
     });
   }
   function loadDownloads() {
-    ensureScript('downloads.js').then(function () {
+    Promise.all([mePromise, subPromise]).then(function () {
+      return ensureScript('downloads.js');
+    }).then(function () {
       window.HCDownloads.show();
     }).catch(function () {
       $('dl-state').hidden = false;
@@ -923,7 +929,13 @@
     viewerName = me.user ? me.user.username : null;
     viewerId = me.user ? me.user.id : null;
     isGuest = !!me.guest;
-    if (viewerId) writeJSON(meCacheKey(), { id: viewerId, username: viewerName, guest: false });
+    if (viewerId) {
+      var meCached = readJSON(meCacheKey(), {}) || {};
+      meCached.id = viewerId;
+      meCached.username = viewerName;
+      meCached.guest = false;
+      writeJSON(meCacheKey(), meCached);
+    }
     if (!me.user) $('add-drama-btn').disabled = true;
     return me;
   }).catch(function () {
@@ -933,9 +945,17 @@
   });
 
   // VIP is fetched once per boot; the downloads and watch views read it.
-  api('subscription').then(function (s) {
+  // Kept as a promise so those views can wait for it, and remembered in the
+  // hc-me cache so an offline launch still knows a VIP viewer is one.
+  var subPromise = api('subscription').then(function (s) {
     viewerVip = !!s.vip;
-  }).catch(function () {});
+    var me = readJSON(meCacheKey(), null);
+    if (me) { me.vip = viewerVip; writeJSON(meCacheKey(), me); }
+    return s;
+  }).catch(function () {
+    var me = readJSON(meCacheKey(), null);
+    if (me) viewerVip = !!me.vip;
+  });
 
   i18n.init();
   i18n.onChange(function () {
