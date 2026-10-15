@@ -15,6 +15,7 @@ const ROUTES = [
   { re: /^\/profile$/, view: () => import('./views/profile.js'), tab: 'profile' },
   { re: /^\/search$/, view: () => import('./views/search.js'), tab: null },
   { re: /^\/add$/, view: () => import('./views/add.js'), tab: null },
+  { re: /^\/posters$/, view: () => import('./views/posters.js'), tab: null },
   { re: /^\/profiles$/, view: () => import('./views/profiles.js'), tab: null },
   { re: /^\/drama\/(\d+)$/, view: () => import('./views/drama.js'), tab: null },
   { re: /^\/watch\/(\d+)\/(\d+)$/, view: () => import('./views/player.js'), tab: null, player: true },

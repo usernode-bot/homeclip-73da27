@@ -12,6 +12,21 @@ export function el(html) {
   return tpl.content.firstElementChild;
 }
 
+// Tiny string hash for cache keys.
+function hashStr(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h * 31) + s.charCodeAt(i)) | 0;
+  return Math.abs(h).toString(36);
+}
+
+// Escape a value coming from a record (provider metadata can carry quotes
+// or angle brackets) before it goes into an el() template.
+export function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 export function timeFmt(sec) {
   sec = Math.max(0, Math.floor(sec || 0));
   const h = Math.floor(sec / 3600);
@@ -66,7 +81,7 @@ function buildCard(d, opts) {
     '<a class="hc-card block shrink-0 ' + (opts2.grid ? 'w-full' : 'w-28') + '" ' +
       'href="' + (opts2.href || '/drama/' + d.id) + '" data-nav>' +
       '<span class="poster relative">' +
-        artImg(d.id, { alt: d.title.replace(/"/g, '&quot;') }) +
+        artImg(d, { alt: d.title.replace(/"/g, '&quot;') }) +
         (opts2.rank ? '<span class="hc-rank">' + opts2.rank + '</span>' : '') +
       '</span>' +
       '<p class="mt-1.5 truncate text-small font-medium text-fg">' + d.title + '</p>' +
@@ -84,8 +99,11 @@ function buildCard(d, opts) {
 
 export function dramaCard(d, opts) {
   const o = opts || {};
+  // The artwork is part of the key: a replaced poster must not be served
+  // from the cache (a short stable hash, not the whole URL).
+  const artKey = d.poster_url ? 'u' + hashStr(d.poster_url) : '';
   const key = d.id + ':' + (o.rank || '') + ':' + (o.grid ? 'g' : 'r') + ':' +
-    (o.href ? 'w' : 'd') + ':' +
+    (o.href ? 'w' : 'd') + ':' + artKey + ':' +
     (o.progress ? o.progress.ep + ':' + Math.round((o.progress.seconds || 0) / 1000) : '');
   let node = cardCache.get(key);
   if (!node) {

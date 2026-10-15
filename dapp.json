@@ -22,6 +22,12 @@
       "required": false,
       "default": "stripe",
       "private": false
+    },
+    {
+      "key": "TMDB_API_KEY",
+      "description": "TMDB API key (v3) from themoviedb.org, Settings, API. Used server-side only, to fetch verified drama metadata and posters for the Posters studio. Leave empty: the app works without it and the studio shows an honest notice instead of importing.",
+      "required": false,
+      "private": true
     }
   ],
   "governance": {
@@ -57,7 +63,11 @@
     { "name": "Discover grid shows original posters", "path": "/discover", "expectSelector": "img[src*='/img/poster/']" },
     { "name": "Drama detail shows backdrop", "path": "/drama/1", "expectSelector": ".hc-backdrop img[src*='/img/backdrop/']", "expectText": "Paper Lanterns at Dusk" },
     { "name": "Episode list shows stills", "path": "/drama/1", "expectSelector": ".hc-still img[src*='/img/still/']" },
-    { "name": "Profiles populated demo", "path": "/profiles?demo=1", "expectText": "Who's watching?" }
+    { "name": "Profiles populated demo", "path": "/profiles?demo=1", "expectText": "Who's watching?" },
+    { "id": "posters.studio", "name": "Poster studio renders", "path": "/posters", "expectText": "Poster search", "expectSelector": "input[type='search']", "visual": true, "impact": ["public/js/views/posters.js", "public/js/views/profile.js", "public/js/router.js", "public/js/i18n.js", "server.js", "providers/**"] },
+    { "name": "Home demo shows short dramas", "path": "/?demo=1", "expectText": "Short dramas" },
+    { "name": "Verified demo record shows its facts", "path": "/drama/9001?demo=1", "expectText": "Original title" },
+    { "name": "Unverified record shows the neutral placeholder", "path": "/drama/9003?demo=1", "expectSelector": "img[src*='placeholder']", "expectText": "Metadata awaiting review" }
   ],
   "visibility": {
     "build": "public",

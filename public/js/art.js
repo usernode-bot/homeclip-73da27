@@ -1,7 +1,14 @@
-// The catalog's original artwork: one free-license photograph per drama
-// (served by picsum.photos under the Unsplash license), chosen to match
-// the drama's genre and mood, compressed to WebP and committed under
-// /img/. No real show, person or logo is depicted in any of them.
+// Artwork resolution is RECORD-driven: a drama's poster and backdrop come
+// from its own database record (poster_url / backdrop_url, filled by the
+// curator's verified TMDB import) first, then the catalog's committed
+// original artwork (the sample dramas), then the neutral placeholder for
+// records without verified artwork. Artwork is never derived from a
+// hand-maintained photo map for imported dramas — one drama, one artwork.
+//
+// The committed sample artwork (one free-license photograph per sample
+// drama, picsum.photos / Unsplash license, compressed to WebP under /img/)
+// still serves the 30 original sample dramas. No real show, person or logo
+// is depicted in any of them.
 //
 // Photo ids and their authors, for the record:
 //   30 Shyamanta Baruah, 82 Rula Sibai, 100 Tina Rataj, 104 Dyaa Eldin,
@@ -22,13 +29,10 @@
 // Sizes: poster thumbs 300×450 and detail posters 600×900 (2:3 crops),
 // backdrops 1200×675 and episode stills 320×180 (16:9 crops), and tiny
 // ~350-byte blurred WebP stand-ins (/img/lqip/) painted as the image's
-// own background while it loads. On failure every image falls back to
-// the generated gradient art (/poster/:id.svg), so a broken image icon
-// never appears.
+// own background while it loads. Committed art and the placeholders are
+// same-origin files; TMDB record URLs are public CDN links.
 
-// Drama id -> photo id. The pool of extra episode stills follows, keyed
-// by genre: a drama cycles its own photo plus its genre's pool across
-// its episode rows.
+// Drama id -> photo id, for the committed sample artwork only.
 const PHOTO = {
   1: 223, 2: 594, 3: 218, 4: 502, 5: 232, 6: 380, 7: 612, 8: 574, 9: 163,
   10: 564, 11: 405, 12: 449, 13: 538, 14: 249, 15: 568, 16: 376, 17: 211,
@@ -52,58 +56,85 @@ const GENRE_HUES = {
   comedy: 28, historical: 165, action: 280,
 };
 
+// Neutral placeholders for records without verified artwork: a quiet grey
+// film-frame glyph, no title, no photo — the same one everywhere, and it is
+// never a stand-in that could belong to another show.
+const PLACEHOLDER_POSTER = '/img/placeholder-poster.svg';
+const PLACEHOLDER_BACKDROP = '/img/placeholder-backdrop.svg';
+
 function photoOf(id) {
   return PHOTO[id] || null;
 }
 
-// Poster image at a given width (300 for cards and rows, 600 for the
-// detail page). Null when the drama has no artwork (user-added dramas).
-export function posterArt(id, width) {
-  const p = photoOf(id);
+// Poster URL for a drama record at a given width (300 for cards and rows,
+// 600 for the detail page). Null when the record carries no artwork and no
+// committed photo (unverified records) — callers render the placeholder.
+export function posterArt(d, width) {
+  if (d && d.poster_url) return d.poster_url;
+  const p = d ? photoOf(d.id) : null;
   return p ? '/img/poster/' + p + '-' + (width || 300) + '.webp' : null;
 }
 
-export function backdropArt(id) {
-  const p = photoOf(id);
+export function backdropArt(d) {
+  if (d && d.backdrop_url) return d.backdrop_url;
+  const p = d ? photoOf(d.id) : null;
   return p ? '/img/backdrop/' + p + '.webp' : null;
 }
 
-// Episode still: the drama's own photo and its genre's pool cycle by
+// First fallback for a FAILED image: committed art falls to the generated
+// gradient art (titled correctly), record-driven art falls to the neutral
+// placeholder — never to an unrelated photo.
+export function posterFallback(d) {
+  return photoOf(d && d.id) ? '/poster/' + d.id + '.svg' : PLACEHOLDER_POSTER;
+}
+
+export function backdropFallback(d) {
+  return photoOf(d && d.id) ? '/banner/' + d.id + '.svg' : PLACEHOLDER_BACKDROP;
+}
+
+// Episode still: the sample drama's own photo and its genre's pool cycle by
 // episode number, so a season's rows do not all show the same frame.
-export function stillArt(id, ep, genre) {
-  const p = photoOf(id);
+// Imported dramas have no committed stills yet: null (the row renders its
+// quiet raised tile with the episode number).
+export function stillArt(d, ep, genre) {
+  const p = d ? photoOf(d.id) : null;
   if (!p) return null;
   const pool = [p].concat(STILL_POOL[genre] || []);
   const n = pool[((ep || 1) - 1) % pool.length];
   return '/img/still/' + n + '.webp';
 }
 
-// Tiny blurred stand-in painted behind an image while it loads.
-export function lqipArt(id, shape) {
-  const p = photoOf(id);
+// Tiny blurred stand-in painted behind committed art while it loads.
+export function lqipArt(d, shape) {
+  const p = d ? photoOf(d.id) : null;
   return p ? '/img/lqip/' + p + '-' + shape + '.webp' : null;
 }
 
-// A poster <img> for a card or row: the real art at 300 wide, the blurred
-// stand-in as its background while it loads, and the generated gradient
-// art as the fallback when it fails. Callers wrap it in an aspect-ratio
-// box (.poster or a fixed-size span) so the page never shifts while it
-// loads.
-export function artImg(id, opts) {
+// A poster <img> for a card or row: the record's art (or the committed
+// sample art at 300 wide), the blurred stand-in as its background while it
+// loads, and the neutral placeholder as the fallback when it fails.
+// Callers wrap it in an aspect-ratio box (.poster or a fixed-size span) so
+// the page never shifts while it loads.
+export function artImg(d, opts) {
   const o = opts || {};
-  const src = posterArt(id, o.width || 300);
-  if (!src) return '<img data-art class="' + (o.cls || '') + '" alt="' + (o.alt || '') + '">';
-  const lqip = lqipArt(id, 'p');
-  return '<img data-art data-fallback="/poster/' + id + '.svg"' +
+  const alt = (o.alt || '').replace(/"/g, '&quot;');
+  const src = posterArt(d, o.width || 300);
+  if (!src) {
+    return '<img data-art class="' + (o.cls || '') + '" src="' + PLACEHOLDER_POSTER +
+      '" alt="' + alt + '" loading="lazy" decoding="async">';
+  }
+  const lqip = lqipArt(d, 'p');
+  return '<img data-art data-fallback="' + posterFallback(d) + '"' +
     ' class="' + (o.cls || '') + '"' +
     (lqip && o.lqip !== false
       ? ' style="background-image:url(' + lqip + ');background-size:cover;background-position:center"'
       : '') +
-    ' loading="lazy" decoding="async" src="' + src + '" alt="' + (o.alt || '') + '">';
+    ' loading="lazy" decoding="async" src="' + src + '" alt="' + alt + '">';
 }
 
-// Every art <img> falls back gracefully: first to the generated gradient
-// art (data-fallback), then, if that fails too, to a quiet hidden image
+// Every art <img> falls back gracefully: first to its data-fallback (the
+// generated gradient art for committed art, the neutral placeholder for
+// record-driven art), then, if that fails too, to a quiet hidden image
 // over its box's raised background. One delegated listener handles every
 // image on every screen, including memoized cards that arrive as clones
 // (clones keep attributes, not listeners).
