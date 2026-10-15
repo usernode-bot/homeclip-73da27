@@ -3,6 +3,7 @@
 
 import { api } from '../api.js';
 import { el, dramaCard, hRow, skeletonHome, errorState, icon } from '../ui.js';
+import { artImg, backdropArt, backdropFallback, lqipArt } from '../art.js';
 import { t, genreLabel, GENRES } from '../i18n.js';
 import { navigate } from '../router.js';
 
@@ -23,20 +24,25 @@ function stopBanner() {
   }
 }
 
-function buildBanner(featured, container) {
+function buildBanner(featured, container, demoParam) {
   if (!featured.length) return;
   // A labelled region with two controls: the artwork link opens the drama's
   // detail page, the round Play button opens the player at episode 1. They
   // must not be nested inside each other, so the banner itself is neither.
   const banner = el(
     '<div class="hc-banner mb-6" role="group" aria-label="' + featured[0].title.replace(/"/g, '&quot;') + '">' +
-      '<a class="absolute inset-0" data-nav href="/drama/' + featured[0].id + '" aria-label="' + featured[0].title.replace(/"/g, '&quot;') + '">' +
+      '<a class="absolute inset-0" data-nav href="/drama/' + featured[0].id + demoParam + '" aria-label="' + featured[0].title.replace(/"/g, '&quot;') + '">' +
         '<div class="absolute inset-0">' +
-          featured.map((d, i) =>
-            '<img src="/banner/' + d.id + '.svg" alt="" loading="lazy" decoding="async" ' +
-            'class="absolute inset-0 h-full w-full object-cover ' +
-            (i === 0 ? 'opacity-100' : 'opacity-0') + ' motion-safe:transition-opacity motion-safe:duration-500" data-slide="' + i + '">'
-          ).join('') +
+          featured.map((d, i) => {
+            const src = backdropArt(d) || backdropFallback(d);
+            const fb = backdropArt(d) ? backdropFallback(d) : '';
+            const lqip = lqipArt(d, 'b');
+            return '<img src="' + src + '" alt="" loading="lazy" decoding="async" data-art' +
+              (fb ? ' data-fallback="' + fb + '"' : '') +
+              (lqip ? ' style="background-image:url(' + lqip + ');background-size:cover;background-position:center"' : '') +
+              ' class="absolute inset-0 h-full w-full object-cover ' +
+              (i === 0 ? 'opacity-100' : 'opacity-0') + ' motion-safe:transition-opacity motion-safe:duration-500" data-slide="' + i + '">';
+          }).join('') +
         '</div>' +
       '</a>' +
       '<div class="hc-banner-text">' +
@@ -68,7 +74,7 @@ function buildBanner(featured, container) {
     dots.forEach((dot, k) => dot.classList.toggle('is-active', k === i));
     title.textContent = featured[i].title;
     meta.textContent = featured[i].year + ' · ' + featured[i].genres.map(genreLabel).join(', ');
-    const href = '/drama/' + featured[i].id;
+    const href = '/drama/' + featured[i].id + demoParam;
     link.setAttribute('href', href);
     link.setAttribute('aria-label', featured[i].title.replace(/"/g, '&quot;'));
     banner.setAttribute('aria-label', featured[i].title.replace(/"/g, '&quot;'));
@@ -89,7 +95,7 @@ function buildBanner(featured, container) {
   container.appendChild(banner);
 }
 
-function buildSearch(container) {
+function buildSearch(container, demoParam) {
   const wrap = el(
     '<div class="hc-search relative mb-6">' +
       '<input class="field pr-4" type="search" name="q" autocomplete="off" ' +
@@ -106,7 +112,7 @@ function buildSearch(container) {
     if (q.length < 2) { hide(); return; }
     searchDebounce = setTimeout(async () => {
       try {
-        const r = await api('/api/dramas?q=' + encodeURIComponent(q) + '&limit=6');
+        const r = await api('/api/dramas?q=' + encodeURIComponent(q) + '&limit=6' + demoParam);
         if (input.value.trim() !== q) return;
         results.innerHTML = '';
         if (!r.items.length) {
@@ -115,12 +121,13 @@ function buildSearch(container) {
           for (const d of r.items) {
             const item = el(
               '<button type="button" class="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-raised" role="option">' +
-                '<img class="h-14 w-10 rounded-md object-cover" loading="lazy" src="/poster/' + d.id + '.svg" alt="">' +
+                '<span class="block h-14 w-10 shrink-0 overflow-hidden rounded-md bg-raised" style="aspect-ratio:2/3">' +
+                  artImg(d, { cls: 'h-full w-full object-cover', lqip: false }) + '</span>' +
                 '<span class="min-w-0"><span class="block truncate text-small font-medium text-fg">' + d.title + '</span>' +
                 '<span class="block truncate text-small text-muted">' + d.year + ' · ' + d.genres.map(genreLabel).join(', ') + '</span></span>' +
               '</button>'
             );
-            item.addEventListener('click', () => { hide(); input.value = ''; navigate('/drama/' + d.id); });
+            item.addEventListener('click', () => { hide(); input.value = ''; navigate('/drama/' + d.id + demoParam); });
             results.appendChild(item);
           }
         }
@@ -172,20 +179,29 @@ export async function render({ view, query }) {
         t('demo.note') + '</p>'
     ));
   }
-  buildSearch(view);
-  buildBanner(data.featured, view);
+  buildSearch(view, demoParam);
+  buildBanner(data.featured, view, demoParam);
   buildChips(view);
 
+  // On the demo page every link keeps ?demo=1 so a demo drama's detail
+  // and player routes (which hide is_demo rows without it) keep working.
+  const hrefD = (d) => '/drama/' + d.id + demoParam;
   const continueRow = (data.continue || []).filter(Boolean);
   if (continueRow.length) {
     view.appendChild(hRow(t('home.continue'),
       continueRow.map((d) => dramaCard(d, {
         progress: { ep: d.ep, seconds: d.seconds, duration: d.duration },
-        href: '/watch/' + d.id + '/' + d.ep,
+        href: '/watch/' + d.id + '/' + d.ep + demoParam,
       }))
     ));
   }
-  view.appendChild(hRow(t('home.trending'), data.trending.map((d) => dramaCard(d))));
-  view.appendChild(hRow(t('home.new'), data.newEpisodes.map((d) => dramaCard(d))));
-  view.appendChild(hRow(t('home.top10'), data.top10.map((d, i) => dramaCard(d, { rank: i + 1 }))));
+  view.appendChild(hRow(t('home.trending'), data.trending.map((d) => dramaCard(d, { href: hrefD(d) }))));
+  view.appendChild(hRow(t('home.new'), data.newEpisodes.map((d) => dramaCard(d, { href: hrefD(d) }))));
+  // Short dramas: a row of their own, only when the catalog has any —
+  // never an empty row.
+  const shortRow = (data.shortDramas || []).filter(Boolean);
+  if (shortRow.length) {
+    view.appendChild(hRow(t('home.short'), shortRow.map((d) => dramaCard(d, { href: hrefD(d) }))));
+  }
+  view.appendChild(hRow(t('home.top10'), data.top10.map((d, i) => dramaCard(d, { rank: i + 1, href: hrefD(d) }))));
 }

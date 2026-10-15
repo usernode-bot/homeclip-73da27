@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450">
+  <!-- Neutral placeholder for dramas without verified artwork. No title, no
+       photo: it can never be mistaken for real artwork. -->
+  <rect width="300" height="450" fill="#26262f"/>
+  <g fill="none" stroke="#5c5c70" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="108" y="172" width="84" height="106" rx="10"/>
+    <path d="M108 196 h84 M108 254 h84"/>
+    <path d="M136 212 l24 13 l-24 13 z" fill="#5c5c70"/>
+  </g>
+</svg>

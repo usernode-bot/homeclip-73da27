@@ -17,6 +17,7 @@ const STRINGS = {
     'common.errorBody': 'Loading failed. Other parts of the app still work.',
     'common.remove': 'Remove',
     'common.saved': 'Settings saved',
+    'common.cancel': 'Cancel',
 
     'time.min': 'min',
 
@@ -27,6 +28,7 @@ const STRINGS = {
     'home.continue': 'Continue Watching',
     'home.browseGenres': 'Browse by genre',
     'home.play': 'Play',
+    'home.short': 'Short dramas',
 
     'search.title': 'Search',
     'search.empty': 'No dramas found.',
@@ -59,6 +61,13 @@ const STRINGS = {
     'detail.added': 'In My List',
     'detail.episode': 'Episode {n}',
     'detail.notFound': 'This drama is not in the catalog.',
+    'detail.originalTitle': 'Original title',
+    'detail.director': 'Director',
+    'detail.epCount': '{n} episodes',
+    'detail.epDuration': '{n} min per episode',
+    'detail.verified': 'Metadata verified',
+    'detail.verifiedSource': 'source themoviedb.org',
+    'detail.needsReview': 'Metadata awaiting review',
 
     'mylist.title': 'My List',
     'mylist.tab.list': 'My List',
@@ -86,7 +95,7 @@ const STRINGS = {
     'profile.notifications': 'Notifications',
     'profile.notificationsDesc': 'New episode alerts (demo setting)',
     'profile.about': 'About',
-    'profile.aboutBody': 'HomeClip Phase 1. Every drama is original sample content with placeholder posters and sample video.',
+    'profile.aboutBody': 'HomeClip. Every drama is original sample content with its own original artwork and sample video.',
 
     'player.play': 'Play',
     'player.pause': 'Pause',
@@ -116,6 +125,10 @@ const STRINGS = {
     'player.vipPlans': 'Go to VIP plans',
 
     'demo.note': 'Staging demo',
+
+    'notfound.title': 'Page not found',
+    'notfound.body': 'This page does not exist. Check the link, or head back Home.',
+    'notfound.home': 'Back to Home',
 
     'profiles.title': 'Profiles',
     'profiles.rowDesc': "Who's watching",
@@ -152,12 +165,56 @@ const STRINGS = {
     'add.countryPh': 'e.g. South Korea',
     'add.genres': 'Genres',
     'add.genresPh': 'e.g. Romance, Mystery',
-    'add.poster': 'Poster link',
+    'add.poster': 'Poster image',
     'add.posterPh': 'https:// (optional)',
+    'add.backdrop': 'Backdrop image',
+    'add.backdropPh': 'https:// (optional)',
+    'add.imageHint': 'JPG, PNG or WebP, up to 5 MB',
+    'add.upload': 'Upload',
+    'add.uploading': 'Uploading image',
+    'add.uploaded': 'Image uploaded',
+    'add.uploadFailed': 'Upload failed. Paste a link instead.',
+    'add.uploadsNeedApp': 'Uploads need the Homeroom app. Paste a link instead.',
+    'add.fileTooBig': 'Choose a file of 5 MB or less.',
+    'add.fileType': 'Choose a JPG, PNG or WebP image.',
     'add.submit': 'Add drama',
     'add.added': 'Drama added',
     'add.viewInTracker': 'View in the drama tracker',
     'add.openTracker': 'Open the drama tracker',
+
+    'posters.title': 'Posters',
+    'posters.rowDesc': 'Verify artwork and metadata',
+    'posters.search': 'Poster search',
+    'posters.searchPh': 'e.g. Winter Garden',
+    'posters.searchHint': 'Search the provider catalog by title, then confirm the match before it is saved.',
+    'posters.tmdbOff': "Metadata import needs a TMDB key. Set TMDB_API_KEY in the app's secrets.",
+    'posters.noResults': 'No matches. Try another title.',
+    'posters.verify': 'Verify',
+    'posters.poster': 'Poster',
+    'posters.backdrop': 'Backdrop',
+    'posters.confirmTitle': 'Confirm title',
+    'posters.confirmYear': 'Confirm year',
+    'posters.contentType': 'Content type',
+    'posters.series': 'Series',
+    'posters.short': 'Short drama',
+    'posters.import': 'Verify and import',
+    'posters.imported': 'Drama imported',
+    'posters.verifyNote': 'The server re-checks the title and year against the provider before saving.',
+    'posters.verifyFailed': 'The confirmation did not match the provider record. Check the title and year.',
+    'posters.duplicate': 'This drama is already in the catalog (#{n}).',
+    'posters.unknownArt': "Pick artwork from this record's own images.",
+    'posters.manual': 'Add without a provider match',
+    'posters.manualHint': 'A drama added by hand has no artwork and stays marked as awaiting review until it is verified.',
+    'posters.countryPh': 'e.g. kr',
+    'posters.checkArt': 'Check artwork',
+    'posters.artOk': 'Artwork loads',
+    'posters.artBroken': 'Broken artwork marked for review',
+    'posters.fix': 'Fix',
+    'posters.verified': 'Verified',
+    'posters.sample': 'Sample',
+    'posters.review': 'Awaiting review',
+    'posters.all': 'All dramas',
+    'posters.none': 'None',
 
     'genres.romance': 'Romance',
     'genres.thriller': 'Thriller',
@@ -165,6 +222,7 @@ const STRINGS = {
     'genres.comedy': 'Comedy',
     'genres.historical': 'Historical',
     'genres.action': 'Action',
+    'genres.drama': 'Drama',
   },
 
   id: {
@@ -180,6 +238,7 @@ const STRINGS = {
     'common.errorBody': 'Pemuatan gagal. Bagian lain aplikasi tetap berfungsi.',
     'common.remove': 'Hapus',
     'common.saved': 'Pengaturan disimpan',
+    'common.cancel': 'Batal',
 
     'time.min': 'mnt',
 
@@ -190,6 +249,7 @@ const STRINGS = {
     'home.continue': 'Lanjut Tonton',
     'home.browseGenres': 'Jelajahi per genre',
     'home.play': 'Putar',
+    'home.short': 'Drama pendek',
 
     'search.title': 'Cari',
     'search.empty': 'Tidak ada drama ditemukan.',
@@ -222,6 +282,13 @@ const STRINGS = {
     'detail.added': 'Ada di Daftar Saya',
     'detail.episode': 'Episode {n}',
     'detail.notFound': 'Drama ini tidak ada dalam katalog.',
+    'detail.originalTitle': 'Judul asli',
+    'detail.director': 'Sutradara',
+    'detail.epCount': '{n} episode',
+    'detail.epDuration': '{n} mnt per episode',
+    'detail.verified': 'Metadata terverifikasi',
+    'detail.verifiedSource': 'sumber themoviedb.org',
+    'detail.needsReview': 'Metadata menunggu pemeriksaan',
 
     'mylist.title': 'Daftar Saya',
     'mylist.tab.list': 'Daftar Saya',
@@ -249,7 +316,7 @@ const STRINGS = {
     'profile.notifications': 'Notifikasi',
     'profile.notificationsDesc': 'Pemberitahuan episode baru (pengaturan demo)',
     'profile.about': 'Tentang',
-    'profile.aboutBody': 'HomeClip Fase 1. Semua drama adalah konten contoh asli dengan poster placeholder dan video contoh.',
+    'profile.aboutBody': 'HomeClip. Semua drama adalah konten contoh asli dengan karya gambar aslinya dan video contoh.',
 
     'player.play': 'Putar',
     'player.pause': 'Jeda',
@@ -279,6 +346,10 @@ const STRINGS = {
     'player.vipPlans': 'Ke paket VIP',
 
     'demo.note': 'Demo staging',
+
+    'notfound.title': 'Halaman tidak ditemukan',
+    'notfound.body': 'Halaman ini tidak ada. Periksa tautannya, atau kembali ke Beranda.',
+    'notfound.home': 'Kembali ke Beranda',
 
     'profiles.title': 'Profil Penonton',
     'profiles.rowDesc': 'Siapa yang menonton',
@@ -315,12 +386,56 @@ const STRINGS = {
     'add.countryPh': 'cth. Korea Selatan',
     'add.genres': 'Genre',
     'add.genresPh': 'cth. Romansa, Misteri',
-    'add.poster': 'Tautan poster',
+    'add.poster': 'Gambar poster',
     'add.posterPh': 'https:// (opsional)',
+    'add.backdrop': 'Gambar latar',
+    'add.backdropPh': 'https:// (opsional)',
+    'add.imageHint': 'JPG, PNG atau WebP, maksimal 5 MB',
+    'add.upload': 'Unggah',
+    'add.uploading': 'Mengunggah gambar',
+    'add.uploaded': 'Gambar terunggah',
+    'add.uploadFailed': 'Unggahan gagal. Tempel tautannya saja.',
+    'add.uploadsNeedApp': 'Unggah butuh aplikasi Homeroom. Tempel tautannya saja.',
+    'add.fileTooBig': 'Pilih berkas 5 MB atau kurang.',
+    'add.fileType': 'Pilih gambar JPG, PNG atau WebP.',
     'add.submit': 'Tambah drama',
     'add.added': 'Drama ditambahkan',
     'add.viewInTracker': 'Lihat di pelacak drama',
     'add.openTracker': 'Buka pelacak drama',
+
+    'posters.title': 'Poster',
+    'posters.rowDesc': 'Periksa poster dan metadata',
+    'posters.search': 'Cari poster',
+    'posters.searchPh': 'cth. Taman Musim Dingin',
+    'posters.searchHint': 'Cari di katalog penyedia berdasarkan judul, lalu konfirmasi kecocokannya sebelum disimpan.',
+    'posters.tmdbOff': 'Impor metadata butuh kunci TMDB. Atur TMDB_API_KEY di secrets aplikasi.',
+    'posters.noResults': 'Tidak ada hasil. Coba judul lain.',
+    'posters.verify': 'Periksa',
+    'posters.poster': 'Poster',
+    'posters.backdrop': 'Latar',
+    'posters.confirmTitle': 'Konfirmasi judul',
+    'posters.confirmYear': 'Konfirmasi tahun',
+    'posters.contentType': 'Jenis konten',
+    'posters.series': 'Seri',
+    'posters.short': 'Drama pendek',
+    'posters.import': 'Periksa dan impor',
+    'posters.imported': 'Drama diimpor',
+    'posters.verifyNote': 'Server memeriksa ulang judul dan tahun dengan penyedia sebelum menyimpan.',
+    'posters.verifyFailed': 'Konfirmasi tidak cocok dengan data penyedia. Periksa judul dan tahunnya.',
+    'posters.duplicate': 'Drama ini sudah ada di katalog (#{n}).',
+    'posters.unknownArt': 'Pilih gambar dari data rekaman ini sendiri.',
+    'posters.manual': 'Tambah tanpa kecocokan penyedia',
+    'posters.manualHint': 'Drama tambahan manual tidak punya gambar dan tetap ditandai menunggu pemeriksaan sampai diverifikasi.',
+    'posters.countryPh': 'cth. kr',
+    'posters.checkArt': 'Periksa poster',
+    'posters.artOk': 'Poster dimuat',
+    'posters.artBroken': 'Poster rusak, ditandai untuk diperiksa',
+    'posters.fix': 'Perbaiki',
+    'posters.verified': 'Terverifikasi',
+    'posters.sample': 'Contoh',
+    'posters.review': 'Menunggu pemeriksaan',
+    'posters.all': 'Semua drama',
+    'posters.none': 'Tidak ada',
 
     'genres.romance': 'Romansa',
     'genres.thriller': 'Thriller',
@@ -328,10 +443,11 @@ const STRINGS = {
     'genres.comedy': 'Komedi',
     'genres.historical': 'Sejarah',
     'genres.action': 'Aksi',
+    'genres.drama': 'Drama',
   },
 };
 
-export const GENRES = ['romance', 'thriller', 'fantasy', 'comedy', 'historical', 'action'];
+export const GENRES = ['romance', 'drama', 'thriller', 'fantasy', 'comedy', 'historical', 'action'];
 export const COUNTRIES = ['kr', 'jp', 'cn', 'th', 'id', 'my', 'ph', 'tr', 'in', 'uk', 'sg'];
 
 const COUNTRY_LABELS = {
@@ -388,4 +504,21 @@ export function countLabel(n) {
 
 export function countryLabel(key) {
   return (COUNTRY_LABELS[lang] && COUNTRY_LABELS[lang][key]) || key;
+}
+
+// Language names for a record's language code (the metadata record carries
+// the provider's ISO 639-1 tag); an unknown code shows as itself.
+const LANG_LABELS = {
+  en: {
+    en: 'English', ko: 'Korean', zh: 'Mandarin', ja: 'Japanese', th: 'Thai',
+    id: 'Indonesian', ms: 'Malay', tl: 'Filipino', tr: 'Turkish', es: 'Spanish', hi: 'Hindi',
+  },
+  id: {
+    en: 'Inggris', ko: 'Korea', zh: 'Mandarin', ja: 'Jepang', th: 'Thai',
+    id: 'Indonesia', ms: 'Melayu', tl: 'Filipino', tr: 'Turki', es: 'Spanyol', hi: 'Hindi',
+  },
+};
+
+export function langLabel(code) {
+  return (LANG_LABELS[lang] && LANG_LABELS[lang][code]) || code;
 }

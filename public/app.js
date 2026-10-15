@@ -213,6 +213,14 @@
     toastTimer = setTimeout(function () { t.hidden = true; }, 2000);
   }
 
+  // A poster or backdrop link that points at nothing hides itself, so the
+  // flat colour tile or the raised banner shows instead of a broken icon.
+  document.addEventListener('error', function (e) {
+    var img = e.target;
+    if (!img || !img.tagName || img.tagName !== 'IMG') return;
+    img.style.visibility = 'hidden';
+  }, true);
+
   // Shared links carry no token and no demo flag: they start with the app's
   // own path only, so whoever opens them gets their own sign-in.
   function dramaUrl(dramaId) {
@@ -667,6 +675,14 @@
     dp.innerHTML = data.drama.poster_url
       ? '<img src="' + esc(data.drama.poster_url) + '" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block;border-radius:inherit">'
       : '';
+    var db = $('drama-backdrop');
+    if (data.drama.backdrop_url) {
+      db.innerHTML = '<img src="' + esc(data.drama.backdrop_url) + '" alt="" loading="lazy">';
+      db.hidden = false;
+    } else {
+      db.innerHTML = '';
+      db.hidden = true;
+    }
     $('drama-title').textContent = data.drama.title;
     document.title = i18n.t('title_drama', { title: data.drama.title });
     var desc = (data.drama.synopsis ? data.drama.synopsis + ' ' : '') +
@@ -1220,6 +1236,7 @@
     $('drama-country-input').value = '';
     $('drama-rating-input').value = '';
     $('drama-poster-input').value = '';
+    $('drama-backdrop-input').value = '';
     $('add-drama-error').hidden = true;
     showSheet('sheet-add-drama');
   }
@@ -1233,6 +1250,7 @@
       country: $('drama-country-input').value,
       rating: $('drama-rating-input').value,
       poster_url: $('drama-poster-input').value,
+      backdrop_url: $('drama-backdrop-input').value,
     }}).then(function () {
       hideSheet();
       if (location.hash && location.hash !== '#/') location.hash = '#/';
@@ -1244,26 +1262,46 @@
       p.hidden = false;
     });
   });
-  // Poster upload through the platform's storage (the bridge), with the
-  // link field as the fallback everywhere the bridge is not there.
-  $('poster-upload-btn').addEventListener('click', function () {
-    $('poster-file-input').click();
+  // Poster and backdrop upload through the platform's storage (the
+  // bridge), with the link fields as the fallback everywhere the bridge
+  // is not there. Only the returned URL is kept. Files are limited to
+  // the image types the platform stores, 5 MB at most.
+  var IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+  var MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+  function wireImageUpload(btnId, fileId, label, onUrl) {
+    $(btnId).addEventListener('click', function () {
+      $(fileId).click();
+    });
+    $(fileId).addEventListener('change', function () {
+      var file = this.files && this.files[0];
+      this.value = '';
+      if (!file) return;
+      if (IMAGE_TYPES.indexOf(file.type) === -1) {
+        toast('Choose a JPG, PNG, WebP or GIF image');
+        return;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        toast('Choose a file of 5 MB or less');
+        return;
+      }
+      if (window.usernode && window.usernode.uploadFile) {
+        toast('Uploading ' + label);
+        window.usernode.uploadFile(file, { visibility: 'public' }).then(function (stored) {
+          onUrl(stored.url);
+          toast(label.charAt(0).toUpperCase() + label.slice(1) + ' uploaded');
+        }).catch(function () {
+          toast('Upload failed, paste a link instead');
+        });
+      } else {
+        toast('Uploads need the Homeroom app, paste a link instead');
+      }
+    });
+  }
+  wireImageUpload('poster-upload-btn', 'poster-file-input', 'poster', function (url) {
+    $('drama-poster-input').value = url;
   });
-  $('poster-file-input').addEventListener('change', function () {
-    var file = this.files && this.files[0];
-    this.value = '';
-    if (!file) return;
-    if (window.usernode && window.usernode.uploadFile) {
-      toast('Uploading poster');
-      window.usernode.uploadFile(file, { visibility: 'public' }).then(function (stored) {
-        $('drama-poster-input').value = stored.url;
-        toast('Poster uploaded');
-      }).catch(function () {
-        toast('Upload failed, paste a link instead');
-      });
-    } else {
-      toast('Uploads need the Homeroom app, paste a link instead');
-    }
+  wireImageUpload('backdrop-upload-btn', 'backdrop-file-input', 'backdrop', function (url) {
+    $('drama-backdrop-input').value = url;
   });
 
   function openAddEpisode() {

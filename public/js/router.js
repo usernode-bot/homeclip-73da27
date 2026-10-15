@@ -16,9 +16,13 @@ const ROUTES = [
   { re: /^\/profile$/, view: () => import('./views/profile.js'), tab: 'profile' },
   { re: /^\/search$/, view: () => import('./views/search.js'), tab: null },
   { re: /^\/add$/, view: () => import('./views/add.js'), tab: null },
+  { re: /^\/posters$/, view: () => import('./views/posters.js'), tab: null },
   { re: /^\/profiles$/, view: () => import('./views/profiles.js'), tab: null },
   { re: /^\/drama\/(\d+)$/, view: () => import('./views/drama.js'), tab: null },
   { re: /^\/watch\/(\d+)\/(\d+)$/, view: () => import('./views/player.js'), tab: null, player: true },
+  // Catch-all: everything unmatched is the not-found screen, last so the
+  // real routes above always win.
+  { re: /.*/, view: () => import('./views/notfound.js'), tab: null },
 ];
 
 const TABS = [
@@ -29,6 +33,13 @@ const TABS = [
 ];
 
 let cleanup = null;
+
+// Per-tab scroll memory, for the session only: the offset a tab route was
+// left at, keyed by its path (query excluded, so Discover's filter rewrites
+// stay in one slot). A fresh page load starts every tab at the top.
+const scrollMem = new Map();
+let lastPath = null;
+let lastWasTab = false;
 
 function matchRoute(path) {
   for (const r of ROUTES) {
@@ -41,13 +52,17 @@ function matchRoute(path) {
 function renderTabbar(activeKey, hideBar) {
   const tabbar = tabEl();
   if (!tabbar) return;
+  // Real links, handled by the delegated a[data-nav] click handler below:
+  // a tab navigates like any link (pushState, no reload) and the browser
+  // treats it as one (middle-click, new tab). The active tab follows the
+  // route, not the tap.
   tabbar.innerHTML = TABS.map((tb) =>
-    '<button type="button" data-tab="' + tb.key + '" data-path="' + tb.path + '" ' +
-    'class="' + (tb.key === activeKey ? 'is-active' : '') + '" ' +
+    '<a href="' + tb.path + '" data-nav class="' + (tb.key === activeKey ? 'is-active' : '') + '" ' +
+    (tb.key === activeKey ? 'aria-current="page" ' : '') +
     'aria-label="' + t('tab.' + tb.key) + '">' +
     icon(tb.icon) +
     '<span>' + t('tab.' + tb.key) + '</span>' +
-    '</button>'
+    '</a>'
   ).join('');
   tabbar.hidden = !!hideBar;
 }
@@ -59,20 +74,21 @@ export function refreshTabbar() {
 }
 
 export async function render() {
+  let path = location.pathname.replace(/\/+$/, '') || '/';
+  if (path === '') path = '/';
+  // Leaving a tab route: remember where the viewer had scrolled, so
+  // coming back lands where they left.
+  if (lastWasTab && lastPath && lastPath !== path) {
+    scrollMem.set(lastPath, window.scrollY);
+  }
   if (cleanup) {
     try { cleanup(); } catch {}
     cleanup = null;
   }
-  let path = location.pathname.replace(/\/+$/, '') || '/';
-  if (path === '') path = '/';
-  const m = matchRoute(path);
+  // The catch-all route means m is always found; unknown paths render the
+  // not-found screen and keep their URL.
+  const { route, params } = matchRoute(path);
   const container = viewEl();
-  if (!m) {
-    // Unknown path: fall back to Home in place.
-    history.replaceState({}, '', '/');
-    return render();
-  }
-  const { route, params } = m;
   renderTabbar(route.tab, route.player);
   container.hidden = false;
   window.scrollTo(0, 0);
@@ -80,8 +96,17 @@ export async function render() {
     const mod = await route.view();
     if (mod.unmount) cleanup = mod.unmount;
     await mod.render({ view: container, params, query: new URLSearchParams(location.search) });
+    // Coming back to a tab: restore its scroll spot once the content is
+    // drawn. Non-tab routes (drama, player, search, not-found, ...) always
+    // open at the top.
+    if (route.tab && scrollMem.has(path)) {
+      window.scrollTo(0, scrollMem.get(path));
+    }
   } catch (err) {
     console.error('render failed', err);
+  } finally {
+    lastPath = path;
+    lastWasTab = !!route.tab;
   }
 }
 

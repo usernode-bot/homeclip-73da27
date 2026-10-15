@@ -68,6 +68,15 @@ export async function render({ view }) {
         icon('chevronLeft', 'h-5 w-5 rotate-180 text-muted') +
       '</a>'
     ));
+    links.appendChild(el(
+      '<a class="list-row" data-nav href="/posters">' +
+        '<span class="flex-1">' +
+          '<span class="block text-body text-fg">' + t('posters.title') + '</span>' +
+          '<span class="block text-small text-muted">' + t('posters.rowDesc') + '</span>' +
+        '</span>' +
+        icon('chevronLeft', 'h-5 w-5 rotate-180 text-muted') +
+      '</a>'
+    ));
     view.appendChild(links);
   }
 

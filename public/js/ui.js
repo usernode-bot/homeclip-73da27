@@ -3,6 +3,7 @@
 // the kit's tokens/components in styles/tailwind-input.css.
 
 import { t, genreLabel, countryLabel } from './i18n.js';
+import { artImg } from './art.js';
 
 // Small DOM builder: el(`<p class="x">hi</p>`) → Element.
 export function el(html) {
@@ -11,8 +12,19 @@ export function el(html) {
   return tpl.content.firstElementChild;
 }
 
-export function posterUrl(id) {
-  return '/poster/' + id + '.svg';
+// Tiny string hash for cache keys.
+function hashStr(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h * 31) + s.charCodeAt(i)) | 0;
+  return Math.abs(h).toString(36);
+}
+
+// Escape a value coming from a record (provider metadata can carry quotes
+// or angle brackets) before it goes into an el() template.
+export function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 export function timeFmt(sec) {
@@ -78,9 +90,7 @@ function buildCard(d, opts) {
     // the link it sits on, same rule as the banner.
     '<div class="hc-card block shrink-0 ' + (opts2.grid ? 'w-full' : 'w-28') + '">' +
       '<span class="poster relative">' +
-        '<a class="block" data-nav href="' + detailHref + '">' +
-          '<img loading="lazy" decoding="async" src="' + posterUrl(d.id) + '" alt="' + d.title.replace(/"/g, '&quot;') + '">' +
-        '</a>' +
+        artImg(d, { alt: d.title.replace(/"/g, '&quot;') }) +
         (opts2.rank ? '<span class="hc-rank">' + opts2.rank + '</span>' : '') +
         (opts2.play === false ? '' :
           '<a class="hc-playbadge" data-nav href="/watch/' + d.id + '/' + badgeEp + '" aria-label="' + t('home.play') + '">' +
@@ -103,8 +113,11 @@ function buildCard(d, opts) {
 
 export function dramaCard(d, opts) {
   const o = opts || {};
+  // The artwork is part of the key: a replaced poster must not be served
+  // from the cache (a short stable hash, not the whole URL).
+  const artKey = d.poster_url ? 'u' + hashStr(d.poster_url) : '';
   const key = d.id + ':' + (o.rank || '') + ':' + (o.grid ? 'g' : 'r') + ':' +
-    (o.href ? 'w' : 'd') + ':' + (o.play === false ? 'n' : 'p') + ':' +
+    (o.href ? 'w' : 'd') + ':' + (o.play === false ? 'n' : 'p') + ':' + artKey + ':' +
     (o.progress ? o.progress.ep + ':' + Math.round((o.progress.seconds || 0) / 1000) : '');
   let node = cardCache.get(key);
   if (!node) {

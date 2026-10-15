@@ -449,6 +449,11 @@ svg {width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;strok
 .dposter img {width:100%;height:100%;object-fit:cover;display:block}
 .dcard {flex:0 0 112px;width:112px;display:block}
 
+/* The wide backdrop a drama may carry (uploaded or pasted as a link):
+   shown 16:9 above the drama page's head, or hidden when it has none. */
+.dbanner {aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:rgb(var(--raised));margin-bottom:12px}
+.dbanner img {width:100%;height:100%;object-fit:cover;display:block}
+
 /* Sheets with many fields scroll inside the card instead of running past
    the top of a short window. */
 .sheet-scroll {max-height:86vh;overflow-y:auto}

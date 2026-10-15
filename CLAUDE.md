@@ -111,15 +111,19 @@ or licensed video is used (see `data/catalog.js`).
   (`#0a0a14`), light look a near-white lilac ground. All colours come
   from the tokens in `styles/tailwind-input.css` (`--ground`,
   `--surface`, `--raised`, `--fg`, `--muted`, `--line`, `--accent`).
-- **Signature element:** the generated SVG poster and banner artwork
-  (`/poster/:id.svg`, `/banner/:id.svg`): each drama gets
-  deterministic genre-hued art with a play-glyph badge, so the catalog
-  reads as a streaming wall without any licensed imagery. The
-  Continue Watching row carries a thin accent progress bar
-  (`.hc-progress`) under the title. Play affordances (`.hc-playfab` on
-  the banner, `.hc-playbadge` on poster cards) are round accent circles
-  with a play glyph; the VIP paywall in the player is the lock glyph on
-  the stage, never a blank screen.
+- **Signature element:** the per-drama artwork, one free-license
+  photograph per drama (via picsum.photos, Unsplash license, committed
+  as WebP under `public/img/`), matched to the drama's genre and mood.
+  The generated SVG art (`/poster/:id.svg`, `/banner/:id.svg`,
+  deterministic genre-hued gradients with a play-glyph badge) is the
+  fallback every image falls back to when it fails, so the catalog
+  reads as a streaming wall without any licensed imagery or broken
+  images. The Continue Watching row carries a thin accent progress bar
+  (`.hc-progress`) under the title.
+  Play affordances (`.hc-playfab` on the banner, `.hc-playbadge` on
+  poster cards) are round accent circles with a play glyph; the VIP
+  paywall in the player is the lock glyph on the stage, never a blank
+  screen.
 - **Type scale:** `text-title`, `text-heading`, `text-body`,
   `text-small`, nothing in between.
 - **Both looks:** the app follows the viewer's Homeroom theme (in-app

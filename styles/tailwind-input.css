@@ -53,6 +53,11 @@
   [hidden]:where(:not([hidden="until-found"])) {
     display: none !important;
   }
+  /* The page keeps room above the fixed tab bar (56 px + border) and any
+     home-indicator inset, so the last row is never covered. */
+  #hc-view {
+    padding-bottom: calc(5.5rem + var(--un-safe-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  }
 }
 
 /* ── Components ───────────────────────────────────────────────────────────
@@ -162,6 +167,28 @@
       bg-accent text-small font-bold text-on-accent;
   }
 
+  /* A drama detail's wide backdrop (16:9) above the facts, and a
+     watch/episode row's still thumbnail with the episode number on it.
+     Both keep their ratio so the page never shifts while they load. */
+  .hc-backdrop {
+    @apply overflow-hidden rounded-xl border border-line bg-raised;
+    aspect-ratio: 16 / 9;
+  }
+  .hc-backdrop img {
+    @apply h-full w-full object-cover;
+  }
+  .hc-still {
+    @apply block overflow-hidden rounded-md border border-line bg-raised;
+    aspect-ratio: 16 / 9;
+    width: 7rem;
+  }
+  .hc-still img {
+    @apply h-full w-full object-cover;
+  }
+  .hc-still-num {
+    @apply absolute bottom-1 left-1 rounded bg-black/70 px-1.5 py-0.5 text-small font-medium text-white;
+  }
+
   /* The auto-sliding featured banner. */
   .hc-banner {
     @apply relative overflow-hidden rounded-2xl border border-line bg-raised;
@@ -200,14 +227,17 @@
     @apply fixed inset-x-0 bottom-0 z-40 mx-auto flex max-w-2xl border-t border-line bg-surface;
     padding-bottom: var(--un-safe-inset-bottom, env(safe-area-inset-bottom, 0px));
   }
-  .hc-tabbar button {
-    @apply flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 px-1 text-small text-muted
+  .hc-tabbar button,
+  .hc-tabbar a {
+    @apply flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 px-1 text-small text-muted no-underline
       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus;
   }
-  .hc-tabbar button.is-active {
+  .hc-tabbar button.is-active,
+  .hc-tabbar a.is-active {
     @apply text-accent;
   }
-  .hc-tabbar button svg {
+  .hc-tabbar button svg,
+  .hc-tabbar a svg {
     @apply h-6 w-6;
   }
 

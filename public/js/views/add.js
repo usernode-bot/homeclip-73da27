@@ -1,12 +1,71 @@
 // Add a drama: a form that adds a drama to the shared drama tracker
 // (POST /api/tracker/dramas, the same rules the tracker's own Add drama
 // sheet enforces). Reached from the Profile screen; the tracker feed
-// lives on its own screen at /tracker.
+// lives on its own screen at /tracker. Poster and backdrop images are
+// uploaded through the platform's storage (the bridge) — only the
+// returned URL is kept, never the bytes.
 
 import { api, askForAccount, getToken } from '../api.js';
 import { el, icon, toast } from '../ui.js';
 import { t } from '../i18n.js';
 import { store } from '../store.js';
+
+const MAX_BYTES = 5 * 1024 * 1024;
+const ACCEPTED = ['image/jpeg', 'image/png', 'image/webp'];
+
+// One image row: a link field, an Upload button (through the platform's
+// storage, when the bridge is there) and a preview of what the link
+// holds. Returns its elements for the submit handler.
+function imageField(kind, label, previewCls) {
+  const wrap = el(
+    '<div>' +
+      '<span class="mb-1 block text-small text-muted">' + label + '</span>' +
+      '<div class="flex items-start gap-2">' +
+        '<div class="min-w-0 flex-1">' +
+          '<input class="field" type="url" data-' + kind + ' placeholder="' + t('add.posterPh') + '">' +
+          '<p class="mt-1 px-1 text-small text-muted">' + t('add.imageHint') + '</p>' +
+        '</div>' +
+        '<button type="button" class="btn-secondary shrink-0" data-upload-' + kind + '>' + t('add.upload') + '</button>' +
+        '<input type="file" accept="image/jpeg,image/png,image/webp" class="hidden" data-file-' + kind + '>' +
+      '</div>' +
+      '<img data-preview-' + kind + ' alt="" class="mt-2 ' + previewCls + ' rounded-lg border border-line bg-raised object-cover" hidden>' +
+    '</div>'
+  );
+
+  const input = wrap.querySelector('[data-' + kind + ']');
+  const preview = wrap.querySelector('[data-preview-' + kind + ']');
+  const refresh = () => {
+    preview.hidden = !input.value.trim();
+    if (!preview.hidden) preview.src = input.value.trim();
+  };
+  input.addEventListener('change', refresh);
+  preview.addEventListener('error', () => { preview.hidden = true; });
+
+  const fileInput = wrap.querySelector('[data-file-' + kind + ']');
+  wrap.querySelector('[data-upload-' + kind + ']').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files && fileInput.files[0];
+    fileInput.value = '';
+    if (!file) return;
+    if (!ACCEPTED.includes(file.type)) { toast(t('add.fileType')); return; }
+    if (file.size > MAX_BYTES) { toast(t('add.fileTooBig')); return; }
+    if (window.usernode && window.usernode.uploadFile) {
+      toast(t('add.uploading'));
+      try {
+        const stored = await window.usernode.uploadFile(file, { visibility: 'public' });
+        input.value = stored.url;
+        refresh();
+        toast(t('add.uploaded'));
+      } catch (e) {
+        toast(t('add.uploadFailed'));
+      }
+    } else {
+      toast(t('add.uploadsNeedApp'));
+    }
+  });
+
+  return wrap;
+}
 
 export async function render({ view }) {
   view.innerHTML = '';
@@ -62,10 +121,8 @@ export async function render({ view }) {
     '<label class="block"><span class="mb-1 block text-small text-muted">' + t('add.genres') + '</span>' +
       '<input class="field" data-genres placeholder="' + t('add.genresPh') + '"></label>'
   ));
-  form.appendChild(el(
-    '<label class="block"><span class="mb-1 block text-small text-muted">' + t('add.poster') + '</span>' +
-      '<input class="field" data-poster type="url" placeholder="' + t('add.posterPh') + '"></label>'
-  ));
+  form.appendChild(imageField('poster', t('add.poster'), 'h-24 w-16'));
+  form.appendChild(imageField('backdrop', t('add.backdrop'), 'h-20 w-36'));
   const err = el('<p class="text-small text-muted" hidden></p>');
   form.appendChild(err);
   const submit = el('<button type="submit" class="btn-primary">' + t('add.submit') + '</button>');
@@ -103,9 +160,11 @@ export async function render({ view }) {
           country: form.querySelector('[data-country]').value.trim(),
           genres: form.querySelector('[data-genres]').value,
           poster_url: form.querySelector('[data-poster]').value.trim(),
+          backdrop_url: form.querySelector('[data-backdrop]').value.trim(),
         },
       });
       form.reset();
+      form.querySelectorAll('[data-preview-poster], [data-preview-backdrop]').forEach((p) => { p.hidden = true; p.src = ''; });
       submit.disabled = false;
       toast(t('add.added'));
       done.innerHTML = '';

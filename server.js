@@ -5,6 +5,7 @@ const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
 const { DRAMAS, episodesFor, VIDEO_BASE, VIDEO_POOL } = require('./data/catalog');
 const { isProfane, isSpam, loose } = require('./moderation');
+const tmdb = require('./providers/tmdb');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -352,6 +353,34 @@ COMMENT ON TABLE settings IS 'staging:private';
 COMMENT ON TABLE profiles IS 'staging:private';
 `;
 
+// Verified-metadata columns for the catalog (nullable additions, applied
+// idempotently so databases created before this change migrate on boot).
+// Artwork lives on the drama record itself: poster_url/backdrop_url come
+// from a verified TMDB import (curator workflow), never a random image.
+// tmdb_id is the provider's content ID — unique across imported records so
+// one show cannot be imported twice; verified/needs_review decide whether
+// the record shows real artwork or the neutral placeholder.
+const CATALOG_ALTER_SQL = `
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS original_title TEXT;
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS alternative_titles TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS poster_url TEXT;
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS backdrop_url TEXT;
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS language TEXT;
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS director TEXT;
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS total_episodes INTEGER;
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS episode_duration_min INTEGER;
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS content_type TEXT;
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS genres_raw TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS tmdb_id BIGINT;
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS source_url TEXT;
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS verified BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS is_trending BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS dramas_tmdb_id_idx ON dramas(tmdb_id) WHERE tmdb_id IS NOT NULL;
+`;
+
 // Seed the sample catalog (idempotent; the same content in staging and
 // production — it is the app's Phase 1 mock data, not fake visitor data).
 async function seedCatalog() {
@@ -378,6 +407,71 @@ async function seedCatalog() {
     }
   } finally {
     client.release();
+  }
+}
+
+// Catalog demo records (staging, ?demo=1): three fake dramas that
+// demonstrate the new states without any TMDB key — two verified shorts
+// (poster/backdrop point at their own committed demo artwork, one URL per
+// record, never shared) and one series with no artwork at all, which is
+// what the neutral placeholder and "awaiting review" are for. popularity is
+// kept far below the real catalog's (never a signal the app fabricates) and
+// nothing is featured or trending-pinned.
+async function seedCatalogDemo() {
+  const demoDramas = [
+    {
+      id: 9001, title: 'Melati Jam 3', originalTitle: 'Melati Jam Tiga',
+      year: 2025, country: 'id', language: 'id', genres: ['romance'],
+      genresRaw: ['Drama'], rating: 7.8, popularity: 5, contentType: 'short',
+      verified: true, posterUrl: '/img/demo/poster-9001.svg',
+      backdropUrl: '/img/demo/backdrop-9001.svg',
+      director: 'Sutradara Demo', totalEpisodes: 20, durationMin: 3,
+      synopsisEn: 'Staging demo short drama: twenty three-minute episodes about a night-market flower seller.',
+      synopsisId: 'Demo staging drama pendek: dua puluh episode tiga menit tentang penjual bunga pasar malam.',
+    },
+    {
+      id: 9002, title: 'Taksi Terakhir', originalTitle: 'Taksi Terakhir',
+      year: 2025, country: 'id', language: 'id', genres: ['thriller'],
+      genresRaw: ['Drama', 'Mystery'], rating: 7.5, popularity: 4, contentType: 'short',
+      verified: true, posterUrl: '/img/demo/poster-9002.svg',
+      backdropUrl: '/img/demo/backdrop-9002.svg',
+      director: 'Sutradara Demo', totalEpisodes: 16, durationMin: 4,
+      synopsisEn: 'Staging demo short drama: a night cab driver keeps picking up the same passenger.',
+      synopsisId: 'Demo staging drama pendek: pengemudi taksi malam terus menjemput penumpang yang sama.',
+    },
+    {
+      id: 9003, title: 'Signal Test', originalTitle: 'Signal Test',
+      year: 2024, country: 'kr', language: 'ko', genres: ['drama'],
+      genresRaw: ['Drama'], rating: 8.1, popularity: 3, contentType: 'series',
+      verified: false, needsReview: true, posterUrl: null, backdropUrl: null,
+      director: null, totalEpisodes: 10, durationMin: 45,
+      synopsisEn: 'Staging demo series with no verified artwork: it shows the neutral placeholder.',
+      synopsisId: 'Demo staging serial tanpa poster terverifikasi: tampil dengan placeholder netral.',
+    },
+  ];
+  for (const d of demoDramas) {
+    await pool.query(
+      `INSERT INTO dramas (id, title, original_title, poster_url, backdrop_url, year, country,
+         language, genres, genres_raw, rating, popularity, content_type, verified, needs_review,
+         director, total_episodes, episode_duration_min, synopsis_en, synopsis_id, is_demo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,true)
+       ON CONFLICT (id) DO NOTHING`,
+      [d.id, d.title, d.originalTitle, d.posterUrl, d.backdropUrl, d.year, d.country,
+       d.language, d.genres, d.genresRaw, d.rating, d.popularity, d.contentType,
+       d.verified, !!d.needsReview, d.director, d.totalEpisodes, d.durationMin,
+       d.synopsisEn, d.synopsisId]
+    );
+    for (let n = 1; n <= d.totalEpisodes; n++) {
+      await pool.query(
+        `INSERT INTO episodes (drama_id, num, duration_min, video_url)
+         VALUES ($1,$2,$3,'/sample/clip')
+         ON CONFLICT (drama_id, num) DO NOTHING`,
+        [d.id, n, d.durationMin]
+      );
+    }
+    // Stamp the flag even when the row already exists (a database seeded by
+    // an older boot keeps its copy), so plain routes always hide these rows.
+    await pool.query(`UPDATE dramas SET is_demo = true WHERE id = $1`, [d.id]);
   }
 }
 
@@ -427,6 +521,13 @@ function wantsDemo(req) {
   return IS_STAGING && req.query.demo === '1';
 }
 
+// Catalog rows marked is_demo (staging seed data) are excluded from every
+// catalog response unless the request carries ?demo=1 — the same shape the
+// tracker routes use for their own demo rows.
+function catalogDemoWhere(demo) {
+  return demo ? '' : ' AND NOT d.is_demo';
+}
+
 // The viewing account's demo PROFILES: two fake profiles written once on
 // the account's first ?demo=1 request, marked is_demo, so the Who's
 // watching screen can be seen populated. Plain requests exclude them, so
@@ -443,7 +544,7 @@ async function seedViewerDemoProfiles(userId) {
   }
 }
 
-const DRAMA_FIELDS = 'd.id, d.title, d.year, d.country, d.genres, d.rating, d.popularity, d.cast_names, d.synopsis_en, d.synopsis_id';
+const DRAMA_FIELDS = 'd.id, d.title, d.original_title, d.alternative_titles, d.poster_url, d.backdrop_url, d.year, d.country, d.language, d.genres, d.genres_raw, d.rating, d.popularity, d.featured, d.cast_names, d.director, d.total_episodes, d.episode_duration_min, d.content_type, d.tmdb_id, d.source_url, d.verified, d.needs_review, d.is_trending, d.is_demo, d.synopsis_en, d.synopsis_id';
 
 // ── API ───────────────────────────────────────────────────────────────────
 
@@ -562,16 +663,20 @@ app.get('/api/home', async (req, res) => {
     );
     if (has.rowCount === 0) await seedViewerDemo(req.user.id);
   }
-  const [featured, trending, newEpisodes, top10, cont] = await Promise.all([
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE featured IS NOT NULL ORDER BY featured LIMIT 5`),
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d ORDER BY popularity DESC LIMIT 12`),
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d ORDER BY year DESC, id DESC LIMIT 12`),
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d ORDER BY rating DESC, popularity DESC LIMIT 10`),
+  const demoFilter = catalogDemoWhere(demo);
+  const [featured, trending, newEpisodes, top10, shorts, cont] = await Promise.all([
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE featured IS NOT NULL${demoFilter} ORDER BY featured LIMIT 5`),
+    // Trending: the editorial is_trending pin over the popularity signal.
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter} ORDER BY d.is_trending DESC, d.popularity DESC LIMIT 12`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter} ORDER BY d.year DESC, d.id DESC LIMIT 12`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter} ORDER BY d.rating DESC, d.popularity DESC LIMIT 10`),
+    // Short dramas: a row of their own when the catalog has any.
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.content_type = 'short'${demoFilter} ORDER BY d.popularity DESC LIMIT 12`),
     req.user
       ? pool.query(
           `SELECT ${DRAMA_FIELDS}, w.ep, w.seconds, w.duration, w.updated_at
            FROM watch_progress w JOIN dramas d ON d.id = w.drama_id
-           WHERE w.user_id = $1 ${demo ? '' : 'AND w.is_demo = false'}
+           WHERE w.user_id = $1 ${demo ? '' : 'AND w.is_demo = false'}${demoFilter}
            ORDER BY w.updated_at DESC LIMIT 12`,
           [req.user.id])
       : { rows: [] },
@@ -581,6 +686,7 @@ app.get('/api/home', async (req, res) => {
     trending: trending.rows,
     newEpisodes: newEpisodes.rows,
     top10: top10.rows,
+    shortDramas: shorts.rows,
     continue: cont.rows,
   });
 });
@@ -588,11 +694,13 @@ app.get('/api/home', async (req, res) => {
 // Browse / search with filters, sort and pagination.
 app.get('/api/dramas', async (req, res) => {
   const { genre, country, year, sort, q } = req.query;
+  const demo = wantsDemo(req);
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const limit = Math.min(24, Math.max(6, parseInt(req.query.limit, 10) || 15));
   const where = [];
   const params = [];
-  if (genre && ['romance', 'thriller', 'fantasy', 'comedy', 'historical', 'action'].includes(genre)) {
+  if (!demo) where.push('NOT d.is_demo');
+  if (genre && ['romance', 'thriller', 'fantasy', 'comedy', 'historical', 'action', 'drama'].includes(genre)) {
     params.push(genre); where.push(`$${params.length} = ANY(d.genres)`);
   }
   if (country && /^[a-z]{2}$/.test(country)) {
@@ -625,6 +733,8 @@ app.get('/api/dramas/:id', async (req, res) => {
   if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'not_found' });
   const d = await pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.id = $1`, [id]);
   if (d.rowCount === 0) return res.status(404).json({ error: 'not_found' });
+  // Staging demo rows stay behind ?demo=1, like the list routes.
+  if (d.rows[0].is_demo && !wantsDemo(req)) return res.status(404).json({ error: 'not_found' });
   const eps = await pool.query(
     'SELECT num, duration_min, video_url, access, fallback_url FROM episodes WHERE drama_id = $1 ORDER BY num', [id]
   );
@@ -658,6 +768,268 @@ app.get('/api/dramas/:id', async (req, res) => {
   res.json({ drama: d.rows[0], episodes, inMyList, progress });
 });
 
+// Wrap an async handler so a rejected promise answers 500 JSON instead of
+// hanging the request.
+const h = (fn) => (req, res) => {
+  fn(req, res).catch((err) => {
+    console.error(err);
+    if (!res.headersSent) res.status(500).json({ error: 'server_error' });
+  });
+};
+
+// ── Curator routes: verified metadata and poster artwork ─────────────────
+// The drama catalog's records are filled through these routes: a curator
+// searches TMDB, confirms the title and release year against the provider's
+// record, and imports. The server NEVER trusts client metadata — every
+// import re-fetches the record from TMDB and verifies before writing, and
+// artwork paths must belong to that record's own image lists, so no
+// hand-typed URL can pair a foreign poster with a title. Records imported
+// without a provider match are saved needs_review with no artwork and
+// render the neutral placeholder — never a stand-in image.
+//
+// The app has no role system, so the gate is signed-in membership (the same
+// rule the tracker's write routes use), behind this one helper so a stricter
+// roster can slot in later without touching the routes.
+function requireCurator(req, res) {
+  if (!req.user) {
+    res.status(401).json({ error: 'account_required' });
+    return false;
+  }
+  return true;
+}
+
+// Normalized title for the verify check: case, spacing and punctuation are
+// ignored; the words must match.
+function normTitle(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+const TMDB_YEAR = (d) => (d ? Number(String(d).slice(0, 4)) : null);
+
+// Read-only: search the provider catalog. Never saves anything.
+app.get('/api/admin/tmdb/search', h(async (req, res) => {
+  if (!requireCurator(req, res)) return;
+  if (!tmdb.configured()) return res.status(503).json({ error: 'tmdb_not_configured' });
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json({ items: [] });
+  res.json({ items: await tmdb.searchTv(q) });
+}));
+
+// Read-only: preview one provider record, with its selectable artwork.
+app.get('/api/admin/tmdb/tv/:tmdbId', h(async (req, res) => {
+  if (!requireCurator(req, res)) return;
+  if (!tmdb.configured()) return res.status(503).json({ error: 'tmdb_not_configured' });
+  const tmdbId = parseInt(req.params.tmdbId, 10);
+  if (!Number.isInteger(tmdbId) || tmdbId <= 0) return res.status(404).json({ error: 'not_found' });
+  res.json({ record: await tmdb.getTv(tmdbId) });
+}));
+
+// Verify and import. With tmdbId: the server re-fetches the record and
+// checks the curator's confirmed title (against the provider's title OR
+// original title) and year BEFORE writing; a mismatch writes nothing.
+// Without tmdbId: a manual record, saved needs_review with no artwork.
+app.post('/api/admin/dramas/import', h(async (req, res) => {
+  if (!requireCurator(req, res)) return;
+  const b = req.body || {};
+  const contentType = b.contentType === 'short' ? 'short' : 'series';
+
+  if (b.tmdbId) {
+    if (!tmdb.configured()) return res.status(503).json({ error: 'tmdb_not_configured' });
+    const tmdbId = parseInt(b.tmdbId, 10);
+    if (!Number.isInteger(tmdbId) || tmdbId <= 0) return res.status(400).json({ error: 'bad_request' });
+    const raw = await tmdb.getTv(tmdbId);
+    const nt = normTitle(b.confirmTitle);
+    const verifyOk = nt
+      && (nt === normTitle(raw.title) || nt === normTitle(raw.originalTitle))
+      && Number(b.confirmYear) === raw.year;
+    if (!verifyOk) return res.status(422).json({ error: 'verify_failed' });
+
+    // The provider's content ID prevents duplicate records; re-importing a
+    // show that is already in the catalog answers the existing drama.
+    const dup = await pool.query('SELECT id FROM dramas WHERE tmdb_id = $1', [tmdbId]);
+    if (dup.rowCount && dup.rows[0].id !== b.dramaId) {
+      return res.status(409).json({ error: 'tmdb_duplicate', existingId: dup.rows[0].id });
+    }
+
+    // Artwork paths must come from THIS record's own image lists.
+    const posterPath = b.posterPath && raw.posters.some((p) => p.path === b.posterPath)
+      ? b.posterPath : null;
+    const backdropPath = b.backdropPath && raw.backdrops.some((p) => p.path === b.backdropPath)
+      ? b.backdropPath : null;
+    if ((b.posterPath && !posterPath) || (b.backdropPath && !backdropPath)) {
+      return res.status(422).json({ error: 'unknown_artwork' });
+    }
+    const urls = await tmdb.artworkUrls(posterPath, backdropPath);
+
+    const values = [
+      raw.title, raw.originalTitle, raw.alternativeTitles, urls.posterUrl, urls.backdropUrl,
+      raw.year, raw.country || '', raw.language, raw.genresRaw, tmdb.mapGenres(raw.genresRaw),
+      raw.overview, raw.cast, raw.director, raw.totalEpisodes, raw.episodeDurationMin,
+      contentType, raw.rating, tmdbId,
+      'https://www.themoviedb.org/tv/' + tmdbId,
+    ];
+
+    if (b.dramaId) {
+      // Re-verify / replace on an existing record (poster replacement).
+      const id = parseInt(b.dramaId, 10);
+      const cur = await pool.query('SELECT id FROM dramas WHERE id = $1', [id]);
+      if (!cur.rowCount) return res.status(404).json({ error: 'not_found' });
+      await pool.query(
+        `UPDATE dramas SET title=$1, original_title=$2, alternative_titles=$3, poster_url=$4,
+           backdrop_url=$5, year=$6, country=$7, language=$8, genres_raw=$9, genres=$10,
+           synopsis_en=$11, cast_names=$12, director=$13, total_episodes=$14,
+           episode_duration_min=$15, content_type=$16, rating=$17, tmdb_id=$18, source_url=$19,
+           verified=true, verified_at=now(), needs_review=false
+         WHERE id=$20`,
+        [...values, id]
+      );
+      return res.json({ ok: true, id });
+    }
+
+    const nxt = await pool.query('SELECT COALESCE(MAX(id), 0) + 1 AS n FROM dramas');
+    const id = nxt.rows[0].n;
+    await pool.query(
+      `INSERT INTO dramas (id, title, original_title, alternative_titles, poster_url, backdrop_url,
+         year, country, language, genres_raw, genres, synopsis_en, synopsis_id, cast_names, director,
+         total_episodes, episode_duration_min, content_type, rating, popularity, tmdb_id, source_url,
+         verified, verified_at, needs_review)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'',$13,$14,$15,$16,$17,$18,0,$19,$20,
+         true, now(), false)`,
+      [id, ...values]
+    );
+    // Episodes point at the committed sample clip so playback keeps working;
+    // a flat 1..n list for phase one (no season column yet).
+    const eps = Math.min(raw.totalEpisodes || 0, 100);
+    for (let n = 1; n <= eps; n++) {
+      await pool.query(
+        `INSERT INTO episodes (drama_id, num, duration_min, video_url)
+         VALUES ($1,$2,$3,'/sample/clip')
+         ON CONFLICT (drama_id, num) DO NOTHING`,
+        [id, n, raw.episodeDurationMin || 45]
+      );
+    }
+    return res.json({ ok: true, id });
+  }
+
+  // Manual record: no provider match. Saved needs_review with NO artwork —
+  // the neutral placeholder, never a stand-in poster.
+  const title = String(b.title || '').trim();
+  if (!title || title.length > 120) return res.status(400).json({ error: 'bad_request' });
+  const year = parseInt(b.year, 10);
+  if (!Number.isInteger(year) || year < 1900 || year > 2100) {
+    return res.status(400).json({ error: 'bad_request' });
+  }
+  const country = /^[a-z]{2}$/.test(String(b.country || '')) ? String(b.country) : '';
+  const synopsis = String(b.synopsis || '').slice(0, 2000);
+  const genres = Array.isArray(b.genres)
+    ? b.genres.filter((g) => ['romance', 'thriller', 'fantasy', 'comedy', 'historical', 'action', 'drama'].includes(g))
+    : [];
+  const nxt = await pool.query('SELECT COALESCE(MAX(id), 0) + 1 AS n FROM dramas');
+  const id = nxt.rows[0].n;
+  await pool.query(
+    `INSERT INTO dramas (id, title, year, country, genres, synopsis_en, synopsis_id, content_type,
+       popularity, verified, needs_review)
+     VALUES ($1,$2,$3,$4,$5,$6,'',$7,0,false,true)`,
+    [id, title, year, country, genres, synopsis, contentType]
+  );
+  res.json({ ok: true, id, needsReview: true });
+}));
+
+// Curator record list: every catalog drama with its flags, for the studio's
+// review list and artwork checks.
+app.get('/api/admin/dramas', h(async (req, res) => {
+  if (!requireCurator(req, res)) return;
+  const demo = wantsDemo(req);
+  const r = await pool.query(
+    `SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${catalogDemoWhere(demo)} ORDER BY d.id`
+  );
+  res.json({ items: r.rows });
+}));
+
+// Replace artwork or flip curator flags on one record. Poster/backdrop
+// replacement re-validates the paths against the stored tmdb_id's own image
+// lists — same fail-closed rule as import.
+app.patch('/api/admin/dramas/:id', h(async (req, res) => {
+  if (!requireCurator(req, res)) return;
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'not_found' });
+  const cur = await pool.query('SELECT tmdb_id, poster_url FROM dramas WHERE id = $1', [id]);
+  if (!cur.rowCount) return res.status(404).json({ error: 'not_found' });
+  const b = req.body || {};
+  const sets = [];
+  const params = [];
+
+  if (b.posterPath !== undefined || b.backdropPath !== undefined) {
+    const tmdbId = cur.rows[0].tmdb_id;
+    if (!tmdbId) return res.status(400).json({ error: 'not_imported' });
+    if (!tmdb.configured()) return res.status(503).json({ error: 'tmdb_not_configured' });
+    const raw = await tmdb.getTv(tmdbId);
+    if (b.posterPath !== undefined) {
+      if (!raw.posters.some((p) => p.path === b.posterPath)) {
+        return res.status(422).json({ error: 'unknown_artwork' });
+      }
+      const urls = await tmdb.artworkUrls(b.posterPath, null);
+      params.push(urls.posterUrl); sets.push(`poster_url = $${params.length}`);
+    }
+    if (b.backdropPath !== undefined) {
+      if (!raw.backdrops.some((p) => p.path === b.backdropPath)) {
+        return res.status(422).json({ error: 'unknown_artwork' });
+      }
+      const urls = await tmdb.artworkUrls(null, b.backdropPath);
+      params.push(urls.backdropUrl); sets.push(`backdrop_url = $${params.length}`);
+    }
+  }
+  if (b.needsReview !== undefined) {
+    params.push(!!b.needsReview); sets.push(`needs_review = $${params.length}`);
+  }
+  if (b.contentType !== undefined) {
+    if (!['short', 'series'].includes(b.contentType)) return res.status(400).json({ error: 'bad_request' });
+    params.push(b.contentType); sets.push(`content_type = $${params.length}`);
+  }
+  if (b.isTrending !== undefined) {
+    params.push(!!b.isTrending); sets.push(`is_trending = $${params.length}`);
+  }
+  if (b.featured !== undefined) {
+    const f = b.featured === null ? null : parseInt(b.featured, 10);
+    params.push(f); sets.push(`featured = $${params.length}`);
+  }
+  if (!sets.length) return res.status(400).json({ error: 'bad_request' });
+  params.push(id);
+  await pool.query(`UPDATE dramas SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+  res.json({ ok: true });
+}));
+
+// Artwork check: HEAD each stored image URL; a broken link flips the record
+// to needs_review and is REPORTED — never silently ignored.
+app.post('/api/admin/dramas/:id/check-art', h(async (req, res) => {
+  if (!requireCurator(req, res)) return;
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'not_found' });
+  const cur = await pool.query('SELECT poster_url, backdrop_url, needs_review FROM dramas WHERE id = $1', [id]);
+  if (!cur.rowCount) return res.status(404).json({ error: 'not_found' });
+  const row = cur.rows[0];
+  const results = {};
+  let broken = false;
+  for (const [kind, url] of [['poster', row.poster_url], ['backdrop', row.backdrop_url]]) {
+    if (!url) { results[kind] = 'missing'; continue; }
+    try {
+      const r = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(10_000) });
+      results[kind] = r.ok ? 'ok' : 'broken';
+      if (!r.ok) broken = true;
+    } catch (e) {
+      results[kind] = 'broken';
+      broken = true;
+    }
+  }
+  if (broken && !row.needs_review) {
+    await pool.query('UPDATE dramas SET needs_review = true WHERE id = $1', [id]);
+  }
+  res.json({ ok: true, results, markedForReview: broken });
+}));
+
 app.get('/api/my-list', async (req, res) => {
   const demo = wantsDemo(req);
   if (demo && req.user) {
@@ -667,7 +1039,7 @@ app.get('/api/my-list', async (req, res) => {
   const r = await pool.query(
     `SELECT ${DRAMA_FIELDS}, m.added_at
      FROM my_list m JOIN dramas d ON d.id = m.drama_id
-     WHERE m.user_id = $1 ${demo ? '' : 'AND m.is_demo = false'}
+     WHERE m.user_id = $1 ${demo ? '' : 'AND m.is_demo = false'}${demo ? '' : ' AND NOT d.is_demo'}
      ORDER BY m.added_at DESC`,
     [req.user ? req.user.id : 0]
   );
@@ -700,7 +1072,7 @@ app.get('/api/history', async (req, res) => {
   const r = await pool.query(
     `SELECT ${DRAMA_FIELDS}, w.ep, w.seconds, w.duration, w.updated_at
      FROM watch_progress w JOIN dramas d ON d.id = w.drama_id
-     WHERE w.user_id = $1 ${demo ? '' : 'AND w.is_demo = false'}
+     WHERE w.user_id = $1 ${demo ? '' : 'AND w.is_demo = false'}${demo ? '' : ' AND NOT d.is_demo'}
      ORDER BY w.updated_at DESC LIMIT 50`,
     [req.user ? req.user.id : 0]
   );
@@ -731,11 +1103,12 @@ app.post('/api/progress', async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/facets', async (_req, res) => {
+app.get('/api/facets', async (req, res) => {
+  const demoFilter = catalogDemoWhere(wantsDemo(req));
   const r = await pool.query(
-    `SELECT DISTINCT country FROM dramas ORDER BY country`
+    `SELECT DISTINCT country FROM dramas d WHERE true${demoFilter} ORDER BY country`
   );
-  const y = await pool.query(`SELECT DISTINCT year FROM dramas ORDER BY year DESC`);
+  const y = await pool.query(`SELECT DISTINCT year FROM dramas d WHERE true${demoFilter} ORDER BY year DESC`);
   res.json({ countries: r.rows.map(x => x.country), years: y.rows.map(x => x.year) });
 });
 
@@ -917,14 +1290,7 @@ function addDays(date, days) {
   return d;
 }
 
-// Wrap an async handler so a rejected promise answers 500 JSON instead of
-// hanging the request.
-const h = (fn) => (req, res) => {
-  fn(req, res).catch((err) => {
-    console.error(err);
-    if (!res.headersSent) res.status(500).json({ error: 'server_error' });
-  });
-};
+// ── Subscription state ───────────────────────────────────────────────────
 
 /* ── Subscription state ─────────────────────────────────────────────────── */
 
@@ -1420,6 +1786,7 @@ async function ensureTrackerSchema() {
     CHECK (rating IS NULL OR (rating BETWEEN 0 AND 10))`);
   await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS cast_list TEXT`);
   await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS poster_url TEXT`);
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS backdrop_url TEXT`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tracker_episodes (
       id BIGSERIAL PRIMARY KEY,
@@ -2377,13 +2744,18 @@ tracker.post('/dramas', async (req, res) => {
     if (poster_url && (!/^https:\/\//.test(poster_url) || poster_url.length > 500)) {
       return res.status(400).json({ error: 'The poster link must start with https://' });
     }
+    const backdrop_url = typeof req.body.backdrop_url === 'string' && req.body.backdrop_url.trim()
+      ? req.body.backdrop_url.trim() : null;
+    if (backdrop_url && (!/^https:\/\//.test(backdrop_url) || backdrop_url.length > 500)) {
+      return res.status(400).json({ error: 'The backdrop link must start with https://' });
+    }
     const r = await pool.query(
-      `INSERT INTO tracker_dramas (title, synopsis, year, country, genres, rating, poster_url, added_by_id, added_by_username)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      `INSERT INTO tracker_dramas (title, synopsis, year, country, genres, rating, poster_url, backdrop_url, added_by_id, added_by_username)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
       [title, synopsis || null, year, country || null,
        genreList.length ? genreList.join(', ') : null,
        rating == null ? null : Math.round(rating * 10) / 10,
-       poster_url, req.user.id, req.user.username]
+       poster_url, backdrop_url, req.user.id, req.user.username]
     );
     return res.status(201).json({ drama: r.rows[0] });
   } catch (err) {
@@ -2413,7 +2785,7 @@ tracker.get('/dramas/:id', async (req, res) => {
     const vip = (await vipStatus(req)).vip;
     const d = await pool.query(
       `SELECT id, title, synopsis, added_by_id, added_by_username, created_at,
-              year, country, genres, rating, cast_list, poster_url
+              year, country, genres, rating, cast_list, poster_url, backdrop_url
          FROM tracker_dramas WHERE id = $1 AND ${demoClause(req, 'is_demo', 2)}`,
       [req.params.id, ...demoParams(req)]
     );
@@ -3192,15 +3564,17 @@ async function shutdown(signal) {
 async function start() {
   await migrateLegacyTrackerTables();
   await pool.query(SCHEMA_SQL);
+  await pool.query(CATALOG_ALTER_SQL);
   await seedCatalog();
   await ensureTrackerSchema();
   if (IS_STAGING) {
     try {
+      await seedCatalogDemo();
       await seedTrackerDemo();
       await seedSampleDramas();
       await seedStagingVip();
     } catch (err) {
-      console.error('tracker demo seed failed', err);
+      console.error('staging demo seed failed', err);
     }
   }
   server = app.listen(port, () => console.log(`Listening on :${port}`));
