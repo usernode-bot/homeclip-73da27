@@ -2,7 +2,7 @@
 // rows, skeletons, states, bottom sheet and toast. All styling goes through
 // the kit's tokens/components in styles/tailwind-input.css.
 
-import { t, genreLabel, countryLabel } from './i18n.js';
+import { t, genreLabel, countryLabel, GENRES } from './i18n.js';
 import { artImg } from './art.js';
 
 // Small DOM builder: el(`<p class="x">hi</p>`) → Element.
@@ -25,6 +25,17 @@ export function esc(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// The year · genre caption under a card and in the banner. Only genres the
+// app's vocabulary knows are labelled — an imported record whose provider
+// genres mapped to nothing shows no dangling separator (it falls back to
+// the provider's own first genre name, or nothing).
+export function metaLine(d) {
+  const mapped = ((d && d.genres) || []).filter((g) => GENRES.includes(g)).map(genreLabel);
+  let genres = mapped.join(', ');
+  if (!genres && d && d.genres_raw && d.genres_raw.length) genres = String(d.genres_raw[0]);
+  return [d && d.year, genres].filter(Boolean).join(' · ');
 }
 
 export function timeFmt(sec) {
@@ -77,7 +88,7 @@ const cardCache = new Map();
 
 function buildCard(d, opts) {
   const opts2 = opts || {};
-  const meta = d.year + ' · ' + d.genres.map(genreLabel).join(', ');
+  const meta = metaLine(d);
   const progress = opts2.progress;
   let pct = 0;
   if (progress && progress.duration > 0) pct = Math.min(100, Math.round((progress.seconds / progress.duration) * 100));

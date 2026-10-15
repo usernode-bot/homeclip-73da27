@@ -376,6 +376,10 @@ ALTER TABLE dramas ADD COLUMN IF NOT EXISTS source_url TEXT;
 ALTER TABLE dramas ADD COLUMN IF NOT EXISTS verified BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE dramas ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
 ALTER TABLE dramas ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAULT false;
+-- Why a record sits in review: 'broken_link' | 'missing_poster' | 'manual'
+-- (NULL on a legacy flagged record reads as manual too). Cleared with the
+-- flag when the artwork re-checks clean or the record is re-imported.
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS review_reason TEXT;
 ALTER TABLE dramas ADD COLUMN IF NOT EXISTS is_trending BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE dramas ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT false;
 CREATE UNIQUE INDEX IF NOT EXISTS dramas_tmdb_id_idx ON dramas(tmdb_id) WHERE tmdb_id IS NOT NULL;
@@ -405,6 +409,11 @@ async function seedCatalog() {
         );
       }
     }
+    // The sample catalog's content type was added after the dramas
+    // themselves: stamp the sample rows once (idempotent — only rows still
+    // NULL, and only the samples' id range, never imports or demo rows).
+    // This is what fills Home's Popular Series row.
+    await client.query(`UPDATE dramas SET content_type = 'series' WHERE content_type IS NULL AND id < 9000`);
   } finally {
     client.release();
   }
@@ -448,17 +457,47 @@ async function seedCatalogDemo() {
       synopsisEn: 'Staging demo series with no verified artwork: it shows the neutral placeholder.',
       synopsisId: 'Demo staging serial tanpa poster terverifikasi: tampil dengan placeholder netral.',
     },
+    // Verified series whose stored backdrop link is broken: the record is
+    // already flagged (needs_review, 'broken_link') so the studio's review
+    // list shows the reason without a scan, and its detail page shows the
+    // placeholder where the backdrop was. tmdb_id is fake and only marks
+    // the record as imported, so the studio offers Replace artwork.
+    {
+      id: 9004, title: 'Sinyal Putus', originalTitle: 'Sinyal Putus',
+      year: 2025, country: 'id', language: 'id', genres: ['thriller'],
+      genresRaw: ['Drama', 'Mystery'], rating: 7.4, popularity: 2, contentType: 'series',
+      verified: true, needsReview: true, reviewReason: 'broken_link',
+      posterUrl: '/img/demo/poster-9004.svg', backdropUrl: '/img/demo/missing-9004.svg',
+      tmdbId: 900400, director: 'Sutradara Demo', totalEpisodes: 12, durationMin: 3,
+      synopsisEn: 'Staging demo series whose stored backdrop link no longer loads: the artwork scan flags it.',
+      synopsisId: 'Demo staging serial yang tautan latarnya rusak: pemindaian poster menandainya.',
+    },
+    // Verified series with no artwork at all and no flag yet: the scan
+    // flags it missing_poster, and before that scan it sits in the
+    // studio's "No artwork yet" list and shows the neutral placeholder.
+    {
+      id: 9005, title: 'Poster Hilang', originalTitle: 'Poster Hilang',
+      year: 2024, country: 'id', language: 'id', genres: ['romance'],
+      genresRaw: ['Drama'], rating: 7.2, popularity: 1, contentType: 'series',
+      verified: true, needsReview: false, posterUrl: null, backdropUrl: null,
+      tmdbId: 900500,
+      director: 'Sutradara Demo', totalEpisodes: 8, durationMin: 3,
+      synopsisEn: 'Staging demo series that was verified without artwork: the scan marks its missing poster.',
+      synopsisId: 'Demo staging serial yang terverifikasi tanpa gambar: pemindaian menandai posternya yang hilang.',
+    },
   ];
   for (const d of demoDramas) {
     await pool.query(
       `INSERT INTO dramas (id, title, original_title, poster_url, backdrop_url, year, country,
          language, genres, genres_raw, rating, popularity, content_type, verified, needs_review,
-         director, total_episodes, episode_duration_min, synopsis_en, synopsis_id, is_demo)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,true)
+         review_reason, tmdb_id, director, total_episodes, episode_duration_min,
+         synopsis_en, synopsis_id, is_demo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,true)
        ON CONFLICT (id) DO NOTHING`,
       [d.id, d.title, d.originalTitle, d.posterUrl, d.backdropUrl, d.year, d.country,
        d.language, d.genres, d.genresRaw, d.rating, d.popularity, d.contentType,
-       d.verified, !!d.needsReview, d.director, d.totalEpisodes, d.durationMin,
+       d.verified, !!d.needsReview, d.reviewReason || null, d.tmdbId || null,
+       d.director, d.totalEpisodes, d.durationMin,
        d.synopsisEn, d.synopsisId]
     );
     for (let n = 1; n <= d.totalEpisodes; n++) {
@@ -544,7 +583,7 @@ async function seedViewerDemoProfiles(userId) {
   }
 }
 
-const DRAMA_FIELDS = 'd.id, d.title, d.original_title, d.alternative_titles, d.poster_url, d.backdrop_url, d.year, d.country, d.language, d.genres, d.genres_raw, d.rating, d.popularity, d.featured, d.cast_names, d.director, d.total_episodes, d.episode_duration_min, d.content_type, d.tmdb_id, d.source_url, d.verified, d.needs_review, d.is_trending, d.is_demo, d.synopsis_en, d.synopsis_id';
+const DRAMA_FIELDS = 'd.id, d.title, d.original_title, d.alternative_titles, d.poster_url, d.backdrop_url, d.year, d.country, d.language, d.genres, d.genres_raw, d.rating, d.popularity, d.featured, d.cast_names, d.director, d.total_episodes, d.episode_duration_min, d.content_type, d.tmdb_id, d.source_url, d.verified, d.needs_review, d.review_reason, d.is_trending, d.is_demo, d.synopsis_en, d.synopsis_id';
 
 // ── API ───────────────────────────────────────────────────────────────────
 
@@ -664,11 +703,16 @@ app.get('/api/home', async (req, res) => {
     if (has.rowCount === 0) await seedViewerDemo(req.user.id);
   }
   const demoFilter = catalogDemoWhere(demo);
-  const [featured, trending, newEpisodes, top10, shorts, cont] = await Promise.all([
+  const [featured, trending, series, recent, top10, shorts, cont] = await Promise.all([
     pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE featured IS NOT NULL${demoFilter} ORDER BY featured LIMIT 5`),
     // Trending: the editorial is_trending pin over the popularity signal.
     pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter} ORDER BY d.is_trending DESC, d.popularity DESC LIMIT 12`),
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter} ORDER BY d.year DESC, d.id DESC LIMIT 12`),
+    // Popular Series: the catalog's series, most popular first — the
+    // shorts' counterpart row.
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.content_type = 'series'${demoFilter} ORDER BY d.popularity DESC LIMIT 12`),
+    // Recently Added: the newest catalog entries first, so a drama a
+    // curator just imported leads the row.
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter} ORDER BY d.id DESC LIMIT 12`),
     pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter} ORDER BY d.rating DESC, d.popularity DESC LIMIT 10`),
     // Short dramas: a row of their own when the catalog has any.
     pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.content_type = 'short'${demoFilter} ORDER BY d.popularity DESC LIMIT 12`),
@@ -684,7 +728,8 @@ app.get('/api/home', async (req, res) => {
   res.json({
     featured: featured.rows,
     trending: trending.rows,
-    newEpisodes: newEpisodes.rows,
+    series: series.rows,
+    recent: recent.rows,
     top10: top10.rows,
     shortDramas: shorts.rows,
     continue: cont.rows,
@@ -841,11 +886,21 @@ app.post('/api/admin/dramas/import', h(async (req, res) => {
     const tmdbId = parseInt(b.tmdbId, 10);
     if (!Number.isInteger(tmdbId) || tmdbId <= 0) return res.status(400).json({ error: 'bad_request' });
     const raw = await tmdb.getTv(tmdbId);
+    // Artwork-only replace on an existing record (the studio's Replace
+    // panel): no title/year confirm — the fresh provider fetch is still
+    // where the artwork paths are validated, and the record's verified
+    // metadata is left untouched.
+    const artworkOnly = b.dramaId && b.confirmTitle === undefined;
     const nt = normTitle(b.confirmTitle);
-    const verifyOk = nt
-      && (nt === normTitle(raw.title) || nt === normTitle(raw.originalTitle))
-      && Number(b.confirmYear) === raw.year;
-    if (!verifyOk) return res.status(422).json({ error: 'verify_failed' });
+    if (!artworkOnly) {
+      const verifyOk = nt
+        && (nt === normTitle(raw.title) || nt === normTitle(raw.originalTitle))
+        && Number(b.confirmYear) === raw.year;
+      if (!verifyOk) return res.status(422).json({ error: 'verify_failed' });
+    }
+    if (artworkOnly && !b.posterPath && !b.backdropPath) {
+      return res.status(400).json({ error: 'bad_request' });
+    }
 
     // The provider's content ID prevents duplicate records; re-importing a
     // show that is already in the catalog answers the existing drama.
@@ -877,12 +932,22 @@ app.post('/api/admin/dramas/import', h(async (req, res) => {
       const id = parseInt(b.dramaId, 10);
       const cur = await pool.query('SELECT id FROM dramas WHERE id = $1', [id]);
       if (!cur.rowCount) return res.status(404).json({ error: 'not_found' });
+      if (artworkOnly) {
+        // The artwork columns only: the verified metadata stays as it is.
+        await pool.query(
+          `UPDATE dramas SET poster_url=$1, backdrop_url=$2,
+             needs_review=false, review_reason=NULL
+           WHERE id=$3`,
+          [urls.posterUrl, urls.backdropUrl, id]
+        );
+        return res.json({ ok: true, id });
+      }
       await pool.query(
         `UPDATE dramas SET title=$1, original_title=$2, alternative_titles=$3, poster_url=$4,
            backdrop_url=$5, year=$6, country=$7, language=$8, genres_raw=$9, genres=$10,
            synopsis_en=$11, cast_names=$12, director=$13, total_episodes=$14,
            episode_duration_min=$15, content_type=$16, rating=$17, tmdb_id=$18, source_url=$19,
-           verified=true, verified_at=now(), needs_review=false
+           verified=true, verified_at=now(), needs_review=false, review_reason=NULL
          WHERE id=$20`,
         [...values, id]
       );
@@ -931,8 +996,8 @@ app.post('/api/admin/dramas/import', h(async (req, res) => {
   const id = nxt.rows[0].n;
   await pool.query(
     `INSERT INTO dramas (id, title, year, country, genres, synopsis_en, synopsis_id, content_type,
-       popularity, verified, needs_review)
-     VALUES ($1,$2,$3,$4,$5,$6,'',$7,0,false,true)`,
+       popularity, verified, needs_review, review_reason)
+     VALUES ($1,$2,$3,$4,$5,$6,'',$7,0,false,true,'manual')`,
     [id, title, year, country, genres, synopsis, contentType]
   );
   res.json({ ok: true, id, needsReview: true });
@@ -956,13 +1021,16 @@ app.patch('/api/admin/dramas/:id', h(async (req, res) => {
   if (!requireCurator(req, res)) return;
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'not_found' });
-  const cur = await pool.query('SELECT tmdb_id, poster_url FROM dramas WHERE id = $1', [id]);
+  const cur = await pool.query(
+    'SELECT tmdb_id, poster_url, needs_review, review_reason FROM dramas WHERE id = $1', [id]);
   if (!cur.rowCount) return res.status(404).json({ error: 'not_found' });
   const b = req.body || {};
   const sets = [];
   const params = [];
+  let artworkPatched = false;
 
   if (b.posterPath !== undefined || b.backdropPath !== undefined) {
+    artworkPatched = true;
     const tmdbId = cur.rows[0].tmdb_id;
     if (!tmdbId) return res.status(400).json({ error: 'not_imported' });
     if (!tmdb.configured()) return res.status(503).json({ error: 'tmdb_not_configured' });
@@ -999,35 +1067,109 @@ app.patch('/api/admin/dramas/:id', h(async (req, res) => {
   if (!sets.length) return res.status(400).json({ error: 'bad_request' });
   params.push(id);
   await pool.query(`UPDATE dramas SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+  // Fresh artwork that replaced a flagged one clears an ARTWORK-only flag
+  // (the caller can confirm the new URLs with the per-record check). A
+  // flag raised for another reason, or an explicit needsReview in the same
+  // request, is left alone.
+  if (artworkPatched && b.needsReview === undefined &&
+      cur.rows[0].needs_review && ARTWORK_REASONS.includes(cur.rows[0].review_reason)) {
+    await pool.query('UPDATE dramas SET needs_review = false, review_reason = NULL WHERE id = $1', [id]);
+  }
   res.json({ ok: true });
 }));
 
-// Artwork check: HEAD each stored image URL; a broken link flips the record
-// to needs_review and is REPORTED — never silently ignored.
+// Probe one stored artwork URL. Absolute URLs (the provider CDN) are
+// HEADed; a same-origin relative path is always one of the app's own
+// committed files, so it is checked against public/ on disk — fetch cannot
+// open a relative URL, and a self-request would need a base URL the server
+// does not reliably know. Returns 'ok' | 'broken' | 'missing'.
+const ART_PROBE_TIMEOUT_MS = 10_000;
+async function probeArtwork(url) {
+  if (!url) return 'missing';
+  if (url.startsWith('/')) {
+    try {
+      await fs.promises.access(path.join(__dirname, 'public', url.replace(/^\/+/, '')));
+      return 'ok';
+    } catch (e) {
+      return 'broken';
+    }
+  }
+  try {
+    const r = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(ART_PROBE_TIMEOUT_MS) });
+    return r.ok ? 'ok' : 'broken';
+  } catch (e) {
+    return 'broken';
+  }
+}
+
+// The artwork defect on one record, if any: a stored link that no longer
+// loads, or (on a verified record) no poster at all. Null means clean.
+function artworkDefect(row, posterState, backdropState) {
+  if (posterState === 'broken' || backdropState === 'broken') return 'broken_link';
+  if (row.verified && !row.poster_url) return 'missing_poster';
+  return null;
+}
+
+// Artwork reasons the app itself sets. A record flagged for another reason
+// ('manual') keeps its flag — the scan never clears a flag it did not set.
+const ARTWORK_REASONS = ['broken_link', 'missing_poster'];
+
+// Artwork check on one record: probe each stored image URL; a broken link
+// (or a verified record with no poster) flips the record to needs_review
+// with the reason and is REPORTED — never silently ignored. A record whose
+// artwork now probes clean loses an artwork-only flag.
 app.post('/api/admin/dramas/:id/check-art', h(async (req, res) => {
   if (!requireCurator(req, res)) return;
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'not_found' });
-  const cur = await pool.query('SELECT poster_url, backdrop_url, needs_review FROM dramas WHERE id = $1', [id]);
+  const cur = await pool.query(
+    'SELECT poster_url, backdrop_url, verified, needs_review, review_reason FROM dramas WHERE id = $1', [id]);
   if (!cur.rowCount) return res.status(404).json({ error: 'not_found' });
   const row = cur.rows[0];
-  const results = {};
-  let broken = false;
-  for (const [kind, url] of [['poster', row.poster_url], ['backdrop', row.backdrop_url]]) {
-    if (!url) { results[kind] = 'missing'; continue; }
-    try {
-      const r = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(10_000) });
-      results[kind] = r.ok ? 'ok' : 'broken';
-      if (!r.ok) broken = true;
-    } catch (e) {
-      results[kind] = 'broken';
-      broken = true;
+  const results = { poster: await probeArtwork(row.poster_url), backdrop: await probeArtwork(row.backdrop_url) };
+  const reason = artworkDefect(row, results.poster, results.backdrop);
+  let cleared = false;
+  if (reason && !row.needs_review) {
+    await pool.query('UPDATE dramas SET needs_review = true, review_reason = $2 WHERE id = $1', [id, reason]);
+  } else if (!reason && row.needs_review && ARTWORK_REASONS.includes(row.review_reason)) {
+    await pool.query('UPDATE dramas SET needs_review = false, review_reason = NULL WHERE id = $1', [id]);
+    cleared = true;
+  }
+  res.json({ ok: true, results, markedForReview: !!reason, cleared });
+}));
+
+// Artwork scan: the same probe across every catalog record, so broken
+// links and verified records without a poster are found without clicking
+// through records one at a time. Flags are written exactly as the
+// per-record check writes them; nothing is un-flagged here.
+app.post('/api/admin/dramas/check-art', h(async (req, res) => {
+  if (!requireCurator(req, res)) return;
+  const demo = wantsDemo(req);
+  const r = await pool.query(
+    `SELECT id, title, poster_url, backdrop_url, verified, needs_review
+     FROM dramas d WHERE true${catalogDemoWhere(demo)} ORDER BY d.id`);
+  const rows = r.rows;
+  const flagged = [];
+  const jobs = rows.map((row) => async () => {
+    const posterState = await probeArtwork(row.poster_url);
+    const backdropState = await probeArtwork(row.backdrop_url);
+    const reason = artworkDefect(row, posterState, backdropState);
+    if (reason && !row.needs_review) {
+      await pool.query(
+        'UPDATE dramas SET needs_review = true, review_reason = $2 WHERE id = $1', [row.id, reason]);
     }
-  }
-  if (broken && !row.needs_review) {
-    await pool.query('UPDATE dramas SET needs_review = true WHERE id = $1', [id]);
-  }
-  res.json({ ok: true, results, markedForReview: broken });
+    if (reason) flagged.push({ id: row.id, title: row.title, reason });
+  });
+  // Five probes at a time: a batch of records stays well inside the
+  // request timeout even when several URLs hang to the probe cap.
+  let next = 0;
+  await Promise.all(Array.from({ length: 5 }, async () => {
+    while (next < jobs.length) {
+      const job = jobs[next++];
+      await job();
+    }
+  }));
+  res.json({ ok: true, checked: rows.length, flagged });
 }));
 
 app.get('/api/my-list', async (req, res) => {
