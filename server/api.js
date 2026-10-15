@@ -102,7 +102,11 @@ module.exports = function registerApi(app, pool, { isStaging }) {
        FROM seasons s LEFT JOIN episodes e ON e.season_id = s.id
        WHERE s.drama_id = ANY($1)
        GROUP BY s.drama_id`, [dramaIds]);
-    return new Map(rows.rows.map(r => [r.drama_id, r]));
+    // Map keys are String-normalized: dramas.id is bigint on databases this
+    // schema did not create (pg returns it as a string) while the new
+    // per-profile tables' drama_id is integer (returned as a number), and a
+    // raw Map.get across that pair silently misses.
+    return new Map(rows.rows.map(r => [String(r.drama_id), r]));
   }
 
   // The per-profile extras a feed or list row shows: follow/list flags,
@@ -138,23 +142,30 @@ module.exports = function registerApi(app, pool, { isStaging }) {
          HAVING count(e.id) > 0 AND count(e.id) = count(w.episode_id)`,
         [profileId, dramaIds]),
     ]);
-    const state = new Map(dramaIds.map(id => [id, {
+    const state = new Map(dramaIds.map(id => [String(id), {
       following: false, inList: false, finished: false,
       progressSeason: null, progressWatched: 0, progressTotal: 0,
     }]));
-    for (const r of follows.rows) state.get(r.drama_id).following = true;
-    for (const r of listed.rows) state.get(r.drama_id).inList = true;
+    for (const r of follows.rows) {
+      const st = state.get(String(r.drama_id));
+      if (st) st.following = true;
+    }
+    for (const r of listed.rows) {
+      const st = state.get(String(r.drama_id));
+      if (st) st.inList = true;
+    }
     for (const r of finishedRows.rows) {
-      const st = state.get(r.drama_id);
+      const st = state.get(String(r.drama_id));
       if (st) st.finished = true;
     }
     const perDrama = new Map();
     for (const r of watches.rows) {
-      if (!perDrama.has(r.drama_id)) perDrama.set(r.drama_id, []);
-      perDrama.get(r.drama_id).push(r);
+      if (!perDrama.has(String(r.drama_id))) perDrama.set(String(r.drama_id), []);
+      perDrama.get(String(r.drama_id)).push(r);
     }
     for (const [dramaId, seasonsSeen] of perDrama) {
       const st = state.get(dramaId);
+      if (!st) continue;
       const totalsForDrama = new Map((totals.get(dramaId) || [])
         .map(t => [t.season, t.total]));
       const active = seasonsSeen
@@ -184,8 +195,9 @@ module.exports = function registerApi(app, pool, { isStaging }) {
        GROUP BY s.drama_id, s.number`, [dramaIds]);
     const map = new Map();
     for (const r of rows.rows) {
-      if (!map.has(r.drama_id)) map.set(r.drama_id, []);
-      map.get(r.drama_id).push({ season: r.number, total: r.total });
+      const key = String(r.drama_id);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push({ season: r.number, total: r.total });
     }
     return map;
   }
@@ -200,15 +212,18 @@ module.exports = function registerApi(app, pool, { isStaging }) {
        FROM episodes e JOIN seasons s ON s.id = e.season_id
        WHERE s.drama_id = ANY($1)
        ORDER BY s.drama_id, s.number DESC, e.number DESC`, [dramaIds]);
-    const map = new Map(rows.rows.map(r => [r.drama_id, r]));
+    const map = new Map(rows.rows.map(r => [String(r.drama_id), r]));
     const episodeIds = rows.rows.map(r => r.id);
     if (profileId && episodeIds.length) {
       const mine = await pool.query(
         `SELECT episode_id FROM episode_watches
          WHERE profile_id = $1 AND episode_id = ANY($2) AND completed`,
         [profileId, episodeIds]);
-      const watched = new Set(mine.rows.map(r => r.episode_id));
-      for (const [dramaId, ep] of map) ep.watchedByMe = watched.has(ep.id);
+      // String-normalized: episodes.id is bigint (a string from pg) on
+      // legacy-shaped databases while episode_watches.episode_id is integer
+      // (a number), so a raw Set.has across that pair misses.
+      const watched = new Set(mine.rows.map(r => String(r.episode_id)));
+      for (const [, ep] of map) ep.watchedByMe = watched.has(String(ep.id));
     }
     if (episodeIds.length) {
       const others = await pool.query(
@@ -219,7 +234,7 @@ module.exports = function registerApi(app, pool, { isStaging }) {
         [episodeIds, profileId || 0]);
       for (const r of others.rows) {
         for (const ep of map.values()) {
-          if (ep.id === r.episode_id) {
+          if (String(ep.id) === String(r.episode_id)) {
             ep.whoElse = ep.whoElse || [];
             if (ep.whoElse.length < 3) ep.whoElse.push(r.name);
           }
@@ -399,12 +414,12 @@ module.exports = function registerApi(app, pool, { isStaging }) {
     const latest = await latestEpisodes(ids, profile ? profile.id : null);
     const weekAgo = new Date(nowOf(req).getTime() - 7 * 24 * 3600 * 1000);
     const dramas = page.map(d => {
-      const c = counts.get(d.id);
-      const st = state.get(d.id);
-      const latestEp = latest.get(d.id);
+      const c = counts.get(String(d.id));
+      const st = state.get(String(d.id));
+      const latestEp = latest.get(String(d.id));
       return {
         ...dramaCard(d, c),
-        seasonTotals: totals.get(d.id) || [],
+        seasonTotals: totals.get(String(d.id)) || [],
         note: feedNote(st, latestEp, weekAgo),
         following: st ? st.following : false,
         inList: st ? st.inList : false,
@@ -495,7 +510,7 @@ module.exports = function registerApi(app, pool, { isStaging }) {
 
   app.post('/api/dramas', async (req, res) => {
     const body = req.body || {};
-    const title = String(body.title || '').trim().slice(0, 120);
+    const title = String(body.title || '').trim().slice(0, 80);
     if (!title) return bad(res, 400, 'bad_request');
     const maturity = body.maturity === 'mature' ? 'mature' : 'all';
     const summary = String(body.summary || '').trim().slice(0, 600);
@@ -539,7 +554,7 @@ module.exports = function registerApi(app, pool, { isStaging }) {
       `SELECT * FROM dramas WHERE slug = $1`, [req.params.slug])).rows[0];
     if (!drama) return bad(res, 404, 'not_found');
     const body = req.body || {};
-    const title = String(body.title || '').trim().slice(0, 120);
+    const title = String(body.title || '').trim().slice(0, 80);
     if (!title) return bad(res, 400, 'bad_request');
     const watchUrl = String(body.watchUrl || '').trim().slice(0, 600);
     const durationSeconds = Math.max(Number(body.durationSeconds) || 0, 0) | 0;
@@ -720,7 +735,7 @@ module.exports = function registerApi(app, pool, { isStaging }) {
     const ids = rows.rows.map(r => r.id);
     const counts = await dramaCounts(ids);
     res.json({
-      items: rows.rows.map(d => ({ ...dramaCard(d, counts.get(d.id)), addedAt: d.added_at })),
+      items: rows.rows.map(d => ({ ...dramaCard(d, counts.get(String(d.id))), addedAt: d.added_at })),
     });
   });
 
@@ -844,7 +859,7 @@ module.exports = function registerApi(app, pool, { isStaging }) {
     const page = rows.rows.slice(0, limit);
     const counts = await dramaCounts(page.map(r => r.id));
     res.json({
-      dramas: page.map(d => dramaCard(d, counts.get(d.id))),
+      dramas: page.map(d => dramaCard(d, counts.get(String(d.id)))),
       nextCursor: hasNext && page.length ? encodeTextCursor(page[page.length - 1]) : null,
     });
   });
@@ -961,7 +976,7 @@ module.exports = function registerApi(app, pool, { isStaging }) {
     const counts = await dramaCounts(items.map(r => r.id));
     res.json({
       base: { slug: base.slug, title: base.title },
-      items: items.map(d => ({ ...dramaCard(d, counts.get(d.id)), shared: d.shared })),
+      items: items.map(d => ({ ...dramaCard(d, counts.get(String(d.id))), shared: d.shared })),
     });
   });
 
@@ -993,14 +1008,17 @@ module.exports = function registerApi(app, pool, { isStaging }) {
        FROM episode_watches w
        WHERE w.profile_id = $1 AND w.episode_id = ANY($2)`,
       [profile.id, episodes.map(e => e.id)])).rows;
-    const done = new Set(watched.filter(w => w.completed).map(w => w.episode_id));
-    const target = episodes.find(e => !done.has(e.id));
+    // String-normalized: episodes.id is bigint (a string from pg) on
+    // legacy-shaped databases while episode_watches.episode_id is integer (a
+    // number), so a raw Set.has across that pair silently misses.
+    const done = new Set(watched.filter(w => w.completed).map(w => String(w.episode_id)));
+    const target = episodes.find(e => !done.has(String(e.id)));
     if (!target) {
       return res.json({ next: null, finished: { slug: followed.slug, title: followed.title } });
     }
     const seasonEpisodes = episodes.filter(e => e.season_number === target.season_number);
-    const watchedInSeason = seasonEpisodes.filter(e => done.has(e.id)).length;
-    const position = watched.find(w => w.episode_id === target.id);
+    const watchedInSeason = seasonEpisodes.filter(e => done.has(String(e.id))).length;
+    const position = watched.find(w => String(w.episode_id) === String(target.id));
     const startIdx = episodes.indexOf(target);
     res.json({
       next: {

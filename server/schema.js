@@ -18,11 +18,41 @@ const PRIVATE = 'staging:private';
 async function migrate(pool) {
   const q = (text) => pool.query(text);
 
+  // ── Legacy reconciliation ──────────────────────────────────────────────
+  // Phases 1-4a kept the catalog in a user-keyed shape: dramas/episodes
+  // owned by added_by_id/added_by_username, follows keyed by user_id +
+  // username. A staging database is a COPY of production, so on it those
+  // tables already exist when this migration runs and every CREATE TABLE
+  // IF NOT EXISTS here is a silent no-op — which used to fail the whole
+  // boot with 'error: column "season_id" does not exist' when the index
+  // below touched the legacy episodes table.
+  //
+  // The per-profile `follows` this app uses now shares its name with the
+  // legacy user-keyed table. Rename the legacy one aside before the
+  // per-profile schema is created: legacy routes keep reading and writing
+  // follows_legacy (see server.js), and the new per-profile table is
+  // created fresh below.
+  await q(`DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'follows' AND column_name = 'user_id')
+         AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'follows' AND column_name = 'profile_id') THEN
+        ALTER TABLE follows RENAME TO follows_legacy;
+      END IF;
+    END $$`);
+  await q(`DO $$
+    BEGIN
+      IF to_regclass('follows_legacy') IS NOT NULL THEN
+        EXECUTE format('COMMENT ON TABLE follows_legacy IS %L', $private$${PRIVATE}$private$);
+      END IF;
+    END $$`);
+
   // ── Public catalog ─────────────────────────────────────────────────────
   await q(`
     CREATE TABLE IF NOT EXISTS dramas (
       id serial PRIMARY KEY,
-      slug text UNIQUE NOT NULL,
+      slug text NOT NULL,
       title text NOT NULL,
       summary text NOT NULL DEFAULT '',
       poster_color text NOT NULL DEFAULT '',
@@ -72,6 +102,92 @@ async function migrate(pool) {
       character_name text NOT NULL DEFAULT '',
       PRIMARY KEY (drama_id, cast_member_id)
     )`);
+
+  // ── Legacy table upgrade ───────────────────────────────────────────────
+  // On a database that predates this schema, the CREATEs above were
+  // no-ops and dramas/episodes still carry the legacy shape. Add the new
+  // columns and fill them from the legacy equivalents, so one table serves
+  // both the legacy routes (server.js) and the Phase-2 routes
+  // (server/api.js). On a database this file created, the columns already
+  // exist and every backfill below matches nothing.
+  await q(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS slug text`);
+  await q(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS summary text NOT NULL DEFAULT ''`);
+  await q(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS poster_color text NOT NULL DEFAULT ''`);
+  await q(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS maturity text NOT NULL DEFAULT 'all'`);
+  await q(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS added_by text NOT NULL DEFAULT ''`);
+  await q(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now()`);
+  await q(`ALTER TABLE episodes ADD COLUMN IF NOT EXISTS season_id integer`);
+  await q(`ALTER TABLE episodes ADD COLUMN IF NOT EXISTS duration_seconds integer NOT NULL DEFAULT 0`);
+
+  // Slugs for dramas that predate them, taken from the title. Legacy seed
+  // dramas already insert namespaced slugs ("demo-…", "sample-…"), so the
+  // backfill only ever fills rows that have none.
+  await q(`DO $$
+    BEGIN
+      UPDATE dramas
+      SET slug = trim(both '-' from regexp_replace(lower(title), '[^a-z0-9]+', '-', 'g'))
+      WHERE slug IS NULL OR slug = '';
+      UPDATE dramas SET slug = 'drama-' || id WHERE slug IS NULL OR slug = '';
+      WHILE EXISTS (SELECT 1 FROM dramas
+                    WHERE slug IS NOT NULL GROUP BY slug HAVING count(*) > 1) LOOP
+        UPDATE dramas d SET slug = d.slug || '-' || d.id
+        WHERE EXISTS (SELECT 1 FROM dramas d2
+                      WHERE d2.slug = d.slug AND d2.id <> d.id AND d2.id < d.id);
+      END LOOP;
+    END $$`);
+  await q(`CREATE UNIQUE INDEX IF NOT EXISTS dramas_slug_idx ON dramas (slug)`);
+
+  // Summary, poster and adder for legacy rows.
+  await q(`DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'dramas' AND column_name = 'synopsis') THEN
+        UPDATE dramas SET summary = synopsis
+        WHERE summary = '' AND synopsis IS NOT NULL AND synopsis <> '';
+      END IF;
+    END $$`);
+  await q(`DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'dramas' AND column_name = 'added_by_username') THEN
+        UPDATE dramas SET added_by = added_by_username WHERE added_by = '';
+      END IF;
+    END $$`);
+
+  // The legacy watch_url CHECK allowed only https links; episodes now may
+  // carry app-relative URLs (the staging demo clip is /demo/clip.mp4), so
+  // drop whatever CHECK constrains that column.
+  await q(`DO $$ DECLARE r record; BEGIN
+    FOR r IN SELECT conname FROM pg_constraint
+             WHERE conrelid = 'episodes'::regclass AND contype = 'c'
+               AND pg_get_constraintdef(oid) ILIKE '%watch_url%'
+    LOOP
+      EXECUTE 'ALTER TABLE episodes DROP CONSTRAINT ' || quote_ident(r.conname);
+    END LOOP;
+  END $$`);
+
+  // Legacy episodes are keyed by (drama_id, season); derive the seasons and
+  // point each episode at its season, so both code paths address the same
+  // rows. The new route's inserts leave drama_id/season empty (their
+  // linkage is season_id), so those two legacy NOT NULLs are relaxed.
+  await q(`DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'episodes' AND column_name = 'drama_id')
+         AND EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'episodes' AND column_name = 'season') THEN
+        ALTER TABLE episodes ALTER COLUMN drama_id DROP NOT NULL;
+        ALTER TABLE episodes ALTER COLUMN season DROP NOT NULL;
+        INSERT INTO seasons (drama_id, number, title)
+        SELECT DISTINCT e.drama_id, e.season, 'Season ' || e.season
+        FROM episodes e
+        WHERE e.season_id IS NULL AND e.drama_id IS NOT NULL AND e.season IS NOT NULL
+        ON CONFLICT (drama_id, number) DO NOTHING;
+        UPDATE episodes e SET season_id = s.id
+        FROM seasons s
+        WHERE e.season_id IS NULL AND e.drama_id = s.drama_id AND e.season = s.number;
+      END IF;
+    END $$`);
 
   // Indices the feed, search and recommendation queries use.
   await q(`CREATE INDEX IF NOT EXISTS dramas_created_idx ON dramas (created_at DESC, id DESC)`);

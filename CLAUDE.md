@@ -203,6 +203,17 @@ text pair at 4.5:1 or more in both looks.
   `payments` are marked `staging:private` (each person's own data, and
   financial data). `dramas`, `episodes` and `coupons` are not: the group's
   shared feed and the promo codes.
+- **Two schemas on one database.** The Phase-2 schema (server/schema.js:
+  slug/summary dramas, seasons, per-profile `follows`) and the phases-1-4a
+  schema (added_by dramas, episodes keyed by drama_id+season, user-keyed
+  follows) share their tables on every database. server/schema.js's
+  `migrate()` reconciles the legacy shape on boot: it renames the old
+  user-keyed `follows` to `follows_legacy` (the legacy routes in server.js
+  still read and write that one), adds the new columns with backfills, and
+  derives a seasons row per legacy (drama_id, season) group. Staging seeds
+  insert legacy-shaped episodes, so start() runs a second `migrate()` pass
+  after them. When touching either shape, boot against both a fresh
+  database and a legacy-shaped one before trusting a green check.
 - **Demo data:** the five demo dramas and their episodes are seeded on boot
   in staging with fixed ids and `is_demo = true`; every API response without
   `?demo=1` leaves `is_demo` rows out, so the plain route stays

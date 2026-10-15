@@ -548,7 +548,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Schema ────────────────────────────────────────────────────────────────
 // Idempotent on boot. `dramas` and `episodes` are public (the group's shared
-// feed); `follows`, `watches` and `reports` are each person's own data,
+// feed); `follows_legacy`, `watches` and `reports` are each person's own data,
 // marked `staging:private` so staging copies the schema without the rows
 // (the demo seeds its own).
 
@@ -588,8 +588,26 @@ async function ensureSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (drama_id, season, number)
     )`);
+  // On a database server/schema.js just created from scratch, the CREATEs
+  // above were no-ops and these columns don't exist at all. Add them so the
+  // legacy routes and demo seeds work on every database shape. Defaults of
+  // 0 / '' let the Phase-2 routes (which never set these) insert too.
+  await pool.query(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS synopsis TEXT`);
+  await pool.query(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS added_by_id BIGINT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS added_by_username TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE dramas ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT false`);
+  await pool.query(`ALTER TABLE dramas ALTER COLUMN added_by_id SET DEFAULT 0`);
+  await pool.query(`ALTER TABLE dramas ALTER COLUMN added_by_username SET DEFAULT ''`);
+  await pool.query(`ALTER TABLE episodes ADD COLUMN IF NOT EXISTS drama_id BIGINT REFERENCES dramas(id) ON DELETE CASCADE`);
+  await pool.query(`ALTER TABLE episodes ADD COLUMN IF NOT EXISTS season INT`);
+  await pool.query(`ALTER TABLE episodes ADD COLUMN IF NOT EXISTS minutes INT`);
+  await pool.query(`ALTER TABLE episodes ADD COLUMN IF NOT EXISTS added_by_id BIGINT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE episodes ADD COLUMN IF NOT EXISTS added_by_username TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE episodes ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT false`);
+  await pool.query(`ALTER TABLE episodes ALTER COLUMN added_by_id SET DEFAULT 0`);
+  await pool.query(`ALTER TABLE episodes ALTER COLUMN added_by_username SET DEFAULT ''`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS follows (
+    CREATE TABLE IF NOT EXISTS follows_legacy (
       user_id BIGINT NOT NULL,
       username TEXT NOT NULL,
       drama_id BIGINT NOT NULL REFERENCES dramas(id) ON DELETE CASCADE,
@@ -616,7 +634,7 @@ async function ensureSchema() {
     )`);
   // Phase 4a: comments (one level of replies), their likes, and drama
   // reviews. Each stores one person's own content, so each is
-  // staging:private like follows/watches/reports. They reference only the
+  // staging:private like follows_legacy/watches/reports. They reference only the
   // public dramas/episodes tables, so the public-to-private rule is not
   // triggered.
   await pool.query(`
@@ -658,7 +676,11 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE reports ADD COLUMN IF NOT EXISTS
     comment_id BIGINT REFERENCES comments(id) ON DELETE CASCADE`);
   // staging:private copies the schema to staging without the rows.
+  // follows (the per-profile table from server/schema.js) and
+  // follows_legacy (the user-keyed table the routes below still use) are
+  // both one person's own data.
   await pool.query(`COMMENT ON TABLE follows IS 'staging:private'`);
+  await pool.query(`COMMENT ON TABLE follows_legacy IS 'staging:private'`);
   await pool.query(`COMMENT ON TABLE watches IS 'staging:private'`);
   await pool.query(`COMMENT ON TABLE reports IS 'staging:private'`);
   await pool.query(`COMMENT ON TABLE comments IS 'staging:private'`);
@@ -798,21 +820,34 @@ const DEMO_FOLLOWS = [
 
 async function seedDemo() {
   for (const d of DEMO_DRAMAS) {
+    // slug exists on both schema shapes (server/schema.js adds it to a
+    // legacy table); namespaced so it can never collide with a real drama
+    // that carries the same title.
     await pool.query(
-      `INSERT INTO dramas (id, title, synopsis, added_by_id, added_by_username, is_demo, created_at)
-       VALUES ($1, $2, $3, $4, $5, true, now() - interval '30 days')
+      `INSERT INTO dramas (id, slug, title, synopsis, added_by_id, added_by_username, is_demo, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, true, now() - interval '30 days')
        ON CONFLICT (id) DO NOTHING`,
-      [d.id, d.title, d.synopsis, DEMO_USERS[d.by], d.by]
+      [d.id, 'demo-' + d.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
+       d.title, d.synopsis, DEMO_USERS[d.by], d.by]
     );
   }
   // Fixed episode ids (9000001 upward in a fixed order), so the watches
-  // below resolve and a re-seed after a partial boot still lands.
+  // below resolve and a re-seed after a partial boot still lands. Each
+  // episode also carries season_id — NOT NULL on a database server/schema.js
+  // created — pointing at the season row for this drama and season, created
+  // here when missing (the seasons table is shared by both schema shapes).
   let n = 9000001;
   for (const [dramaId, season, number, title, minutes] of DEMO_EPISODES) {
     const by = dramaId === 900002 ? 'Priya' : dramaId === 900003 ? 'Jun' : 'Sam';
     await pool.query(
-      `INSERT INTO episodes (id, drama_id, season, number, title, minutes, added_by_id, added_by_username, is_demo, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, now() - interval '30 days')
+      `INSERT INTO seasons (drama_id, number, title) VALUES ($1, $2, $3)
+       ON CONFLICT (drama_id, number) DO NOTHING`,
+      [dramaId, season, 'Season ' + season]
+    );
+    await pool.query(
+      `INSERT INTO episodes (id, drama_id, season, season_id, number, title, minutes, added_by_id, added_by_username, is_demo, created_at)
+       VALUES ($1, $2, $3, (SELECT id FROM seasons WHERE drama_id = $2::bigint AND number = $3),
+               $4, $5, $6, $7, $8, true, now() - interval '30 days')
        ON CONFLICT (id) DO NOTHING`,
       [n, dramaId, season, number, title, minutes, DEMO_USERS[by], by]
     );
@@ -843,7 +878,7 @@ async function seedDemo() {
   }
   for (const [name, dramaId] of DEMO_FOLLOWS) {
     await pool.query(
-      `INSERT INTO follows (user_id, username, drama_id, created_at)
+      `INSERT INTO follows_legacy (user_id, username, drama_id, created_at)
        VALUES ($1, $2, $3, now() - interval '10 days') ON CONFLICT DO NOTHING`,
       [DEMO_USERS[name], name, dramaId]
     );
@@ -1008,13 +1043,21 @@ async function seedSampleDramas() {
     const slug = s.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     await pool.query(
       `INSERT INTO dramas
-         (id, title, synopsis, added_by_id, added_by_username, is_demo, created_at,
+         (id, slug, title, synopsis, added_by_id, added_by_username, is_demo, created_at,
           year, country, genres, rating, cast_list, poster_url)
-       VALUES ($1, $2, $3, $4, $5, true, now() - make_interval(days => $6::int),
-               $7, $8, $9, $10, $11, NULL)
+       VALUES ($1, $2, $3, $4, $5, $6, true, now() - make_interval(days => $7::int),
+               $8, $9, $10, $11, $12, NULL)
        ON CONFLICT (id) DO NOTHING`,
-      [s.id, s.title, s.synopsis, DEMO_USERS[s.by], s.by, s.addedAgo,
+      [s.id, 'sample-' + slug, s.title, s.synopsis, DEMO_USERS[s.by], s.by, s.addedAgo,
        s.year, s.country, s.genres, s.rating, s.cast]
+    );
+    // The sample dramas each have one season; create its row once so the
+    // episode insert below can point season_id at it (NOT NULL on a fresh
+    // database created by server/schema.js).
+    await pool.query(
+      `INSERT INTO seasons (drama_id, number, title) VALUES ($1, 1, 'Season 1')
+       ON CONFLICT (drama_id, number) DO NOTHING`,
+      [s.id]
     );
     for (let i = 0; i < s.eps.length; i++) {
       const number = i + 1;
@@ -1023,9 +1066,10 @@ async function seedSampleDramas() {
       const access = s.vip.includes(number) ? 'vip' : s.ads.includes(number) ? 'ads' : 'free';
       await pool.query(
         `INSERT INTO episodes
-           (id, drama_id, season, number, title, minutes, watch_url, access,
+           (id, drama_id, season, season_id, number, title, minutes, watch_url, access,
             added_by_id, added_by_username, is_demo, created_at)
-         VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, true,
+         VALUES ($1, $2, 1, (SELECT id FROM seasons WHERE drama_id = $2::bigint AND number = 1),
+                 $3, $4, $5, $6, $7, $8, $9, true,
                  now() - make_interval(days => $10::int))
          ON CONFLICT (id) DO NOTHING`,
         [epId, s.id, number, s.eps[i], minutes,
@@ -1037,7 +1081,7 @@ async function seedSampleDramas() {
   }
   for (const [name, dramaId] of SAMPLE_FOLLOWS) {
     await pool.query(
-      `INSERT INTO follows (user_id, username, drama_id, created_at)
+      `INSERT INTO follows_legacy (user_id, username, drama_id, created_at)
        VALUES ($1, $2, $3, now() - interval '8 days') ON CONFLICT DO NOTHING`,
       [DEMO_USERS[name], name, dramaId]
     );
@@ -1053,12 +1097,12 @@ async function seedDemoViewer(user) {
   // Follow times are set so Harbour Lights sorts before The Quiet Wing in
   // Next to watch (its latest watch is the most recent of the two).
   await pool.query(
-    `INSERT INTO follows (user_id, username, drama_id, created_at)
+    `INSERT INTO follows_legacy (user_id, username, drama_id, created_at)
      VALUES ($1, $2, 900001, now() - interval '3 days') ON CONFLICT DO NOTHING`,
     [user.id, user.username]
   );
   await pool.query(
-    `INSERT INTO follows (user_id, username, drama_id, created_at)
+    `INSERT INTO follows_legacy (user_id, username, drama_id, created_at)
      VALUES ($1, $2, 900002, now() - interval '3 hours') ON CONFLICT DO NOTHING`,
     [user.id, user.username]
   );
@@ -1140,7 +1184,7 @@ async function nextToWatch(userId, demo) {
   const res = await pool.query(
     `SELECT f.drama_id,
             MAX(COALESCE(w.watched_at, f.created_at)) AS latest
-       FROM follows f
+       FROM follows_legacy f
        JOIN dramas d ON d.id = f.drama_id
        LEFT JOIN watches w ON w.user_id = f.user_id
         AND w.episode_id IN (SELECT id FROM episodes WHERE drama_id = f.drama_id
@@ -1175,13 +1219,13 @@ async function nextToWatch(userId, demo) {
 }
 
 // On the first ?demo=1 request of the viewing account, write its demo
-// follows and watches (see seedDemoViewer). Awaited so the same request's
+// follows_legacy and watches (see seedDemoViewer). Awaited so the same request's
 // answers already carry them; the follow check makes later calls cheap.
 app.use('/api/', async (req, res, next) => {
   try {
     if (demoOn(req) && req.user) {
       const has = await pool.query(
-        `SELECT 1 FROM follows WHERE user_id = $1 AND drama_id = 900001`, [req.user.id]
+        `SELECT 1 FROM follows_legacy WHERE user_id = $1 AND drama_id = 900001`, [req.user.id]
       );
       if (!has.rows.length) await seedDemoViewer(req.user);
     }
@@ -1269,7 +1313,7 @@ app.get('/api/feed', async (req, res) => {
     let followed = new Set();
     if (viewerId && ids.length) {
       const f = await pool.query(
-        `SELECT drama_id FROM follows WHERE user_id = $1 AND drama_id = ANY($2)
+        `SELECT drama_id FROM follows_legacy WHERE user_id = $1 AND drama_id = ANY($2)
           AND ($3 OR NOT EXISTS (SELECT 1 FROM dramas d WHERE d.id = drama_id AND d.is_demo))`,
         [viewerId, ids, demo]
       );
@@ -1354,7 +1398,7 @@ app.get('/api/feed', async (req, res) => {
     // gating as the feed itself, so the plain route renders these rows from
     // the dramas it really has: empty when there are none.
     const followCounts = ids.length ? await pool.query(
-      `SELECT f.drama_id, COUNT(*)::int AS n FROM follows f
+      `SELECT f.drama_id, COUNT(*)::int AS n FROM follows_legacy f
         WHERE f.drama_id = ANY($2)
           AND ($1 OR NOT EXISTS (SELECT 1 FROM dramas d WHERE d.id = f.drama_id AND d.is_demo))
         GROUP BY f.drama_id`,
@@ -1509,7 +1553,7 @@ app.get('/api/dramas/:id', async (req, res) => {
       [req.params.id, ...demoParams(req), viewerId || 0]
     );
     const following = viewerId
-      ? (await pool.query(`SELECT 1 FROM follows WHERE user_id = $1 AND drama_id = $2`, [viewerId, req.params.id])).rows.length > 0
+      ? (await pool.query(`SELECT 1 FROM follows_legacy WHERE user_id = $1 AND drama_id = $2`, [viewerId, req.params.id])).rows.length > 0
       : false;
     // The average rating rides this response (one aggregate), and the first
     // page of reviews does too, so the drama page needs no extra round-trip;
@@ -1635,7 +1679,7 @@ app.put('/api/dramas/:id/follow', async (req, res) => {
     );
     if (!d.rows.length) return res.status(404).json({ error: 'Drama not found' });
     await pool.query(
-      `INSERT INTO follows (user_id, username, drama_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+      `INSERT INTO follows_legacy (user_id, username, drama_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
       [req.user.id, req.user.username, req.params.id]
     );
     return res.json({ following: true });
@@ -1647,7 +1691,7 @@ app.put('/api/dramas/:id/follow', async (req, res) => {
 
 app.delete('/api/dramas/:id/follow', async (req, res) => {
   try {
-    await pool.query(`DELETE FROM follows WHERE user_id = $1 AND drama_id = $2`, [req.user.id, req.params.id]);
+    await pool.query(`DELETE FROM follows_legacy WHERE user_id = $1 AND drama_id = $2`, [req.user.id, req.params.id]);
     return res.json({ following: false });
   } catch (err) {
     console.error(err);
@@ -2060,6 +2104,11 @@ async function start() {
     } catch (err) {
       console.error('demo seed failed', err);
     }
+    // The staging seeds insert legacy-shaped episodes (keyed by drama_id +
+    // season). migrate() is idempotent, so a second pass right after the
+    // seeds derives those episodes' seasons and points them at one, and
+    // backfills anything else the seeds left to the reconcile step.
+    await migrate(pool);
   }
   server = app.listen(port, () => console.log(`Listening on :${port}`));
   // Let Envoy retire idle upstream connections at 60s, with a 15s margin.

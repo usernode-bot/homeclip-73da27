@@ -226,12 +226,15 @@ async function seedCatalog(pool) {
         [seasonId, drama.id, season.number, 'Season ' + season.number]
       );
       for (const episode of season.episodes) {
+        // drama_id and season are the legacy key columns; on a database
+        // copied from production they are NOT NULL, so always supply them.
         await pool.query(
-          `INSERT INTO episodes (id, season_id, number, title, watch_url, duration_seconds, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, now() - ($7 || ' days')::interval)
+          `INSERT INTO episodes (id, drama_id, season, season_id, number, title, watch_url, duration_seconds, created_at)
+           VALUES ($1, $8, $9, $2, $3, $4, $5, $6, now() - ($7 || ' days')::interval)
            ON CONFLICT (id) DO NOTHING`,
           [episode.id, seasonId, season.episodes.indexOf(episode) + 1, episode.title,
-           episode.watchUrl || '', episode.durationSeconds || 0, String(episode.ageDays)]
+           episode.watchUrl || '', episode.durationSeconds || 0, String(episode.ageDays),
+           drama.id, season.number]
         );
       }
     }
