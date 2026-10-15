@@ -108,8 +108,11 @@ change follows it, and updates it when a request changes the look on purpose.
 Watch your homeroom's own serial drama together. The group adds the serial
 dramas it watches, season by season and episode by episode; each person
 follows the shows they like, marks episodes watched and sees which episode
-comes next ("Next to watch"). HomeClip plays no video itself: an episode can
-carry a link to wherever it is watched, which Watch opens in a new tab.
+comes next ("Next to watch"). An episode can carry a link to wherever it is
+watched, which Watch opens in a new tab, or a video link, which plays inside
+the app's own player (resume position, skip intro, captions, quality, a
+next-episode countdown). VIP members can save an episode on their device and
+watch it offline; nothing is stored server-side.
 Episodes carry access levels — Free, VIP, Free with ads — and a HomeClip VIP
 subscription (Monthly / 3 Months / Yearly, billed in rupiah through Stripe in
 sandbox mode) unlocks VIP episodes, skips the pre-roll ad placeholder, and is
@@ -199,10 +202,12 @@ text pair at 4.5:1 or more in both looks.
 
 ### VIP, payments and demo data
 
-- **Private tables:** `follows`, `watches`, `reports`, `subscriptions` and
-  `payments` are marked `staging:private` (each person's own data, and
-  financial data). `dramas`, `episodes` and `coupons` are not: the group's
-  shared feed and the promo codes.
+- **Private tables:** `follows`, `watches`, `reports`, `playback`,
+  `subscriptions`, `payments`, `events` and `client_errors` are marked
+  `staging:private` (each person's own data, and financial data). `dramas`,
+  `episodes` and `coupons` are not: the group's shared feed and the promo
+  codes.
+
 - **Two schemas on one database.** The Phase-2 schema (server/schema.js:
   slug/summary dramas, seasons, per-profile `follows`) and the phases-1-4a
   schema (added_by dramas, episodes keyed by drama_id+season, user-keyed
@@ -214,14 +219,23 @@ text pair at 4.5:1 or more in both looks.
   insert legacy-shaped episodes, so start() runs a second `migrate()` pass
   after them. When touching either shape, boot against both a fresh
   database and a legacy-shaped one before trusting a green check.
+
 - **Demo data:** the five demo dramas and their episodes are seeded on boot
   in staging with fixed ids and `is_demo = true`; every API response without
   `?demo=1` leaves `is_demo` rows out, so the plain route stays
   production-shaped. The viewing account's own follows and watches are
-  written once, on its first `?demo=1` request. Demo episodes carry a mix of
-  access levels (Harbour Lights S2E6 and The Quiet Wing are VIP; S2E8 and
-  Meridian Court are Free with ads). Staging also seeds fake subscriptions,
-  payments and the `STAGE10` coupon for the shots' fixture accounts only.
+  written once, on its first `?demo=1` request. Episode 9000012 (Harbour
+  Lights S2E6) carries an HLS test stream and the fake captions in
+  `public/demo/demo-subs.vtt`; episode 9000063 (Copper Hill S2E14) carries
+  the small VP9 WebM in `public/demo/demo-video.webm`, served by the app
+  itself so headless browsers with no H.264 decoder can still show real
+  playback and Downloads work with no CORS setup (the clip is Big Buck
+  Bunny, CC BY, Blender Foundation). `?demo=1` also makes the viewing
+  account VIP in memory only, so the Downloads view can be tried.
+  Demo episodes also carry a mix of access levels (Harbour Lights S2E6 and The
+  Quiet Wing are VIP; S2E8 and Meridian Court are Free with ads). Staging also
+  seeds fake subscriptions, payments and the `STAGE10` coupon for the shots'
+  fixture accounts only.
 - **Sample dramas:** twelve more made-up dramas (ids 910001-910012, their
   episodes from 9200001 up) seeded on boot in staging alongside the demo,
   with full metadata: country, year, genres, an editorial rating out of 10,
@@ -233,8 +247,27 @@ text pair at 4.5:1 or more in both looks.
   demo signal.
 - **Vocabulary:** drama, season, episode, Follow, Following, Watch,
   watched, Next to watch, Continue this season, Drama feed, Add drama,
-  Add episode, Report, Remove, VIP, Free, Free with ads. One idea, one word,
-  everywhere.
+  Add episode, Report, Remove, Downloads, Skip intro, Up next, VIP, Free,
+  Free with ads. One idea, one word, everywhere.
+- **Client architecture:** one page (`public/index.html`) with four views
+  (`#view-home`, `#view-drama`, `#view-watch`, `#view-downloads`), routed
+  by app.js on both path (`/drama/:id`, `/watch/:id`, `/downloads`) and
+  hash (`#/drama/:id`, ...). The watch and downloads views' logic lives in
+  `public/watch.js` and `public/downloads.js`, loaded only when those
+  views open; hls.js (the one dependency beyond Express, pg and Tailwind)
+  loads below watch.js only for `.m3u8` sources. All user-visible words
+  live in `public/i18n.js`'s dictionaries (7 locales); server responses
+  carry numbers and names, never sentence words, so a language switch
+  re-renders without a reload.
+- **Offline:** the service worker (`public/sw.js`) precaches the shell only;
+  it never serves `/api/*`. Cached reads (last feed/drama) and the durable
+  write queue live in localStorage under `hc-cache:<userId>...` and
+  `hc-queue:<userId>`; identity under `hc-me`, never wiped when the iframe
+  token is absent (an offline launch has none). Downloads live in IndexedDB
+  (`hc-downloads:<userId>`), with per-user namespacing everywhere.
+- **Analytics is first-party:** the `events` and `client_errors` tables,
+  whitelisted event names server-side, batched client-side. No third-party
+  analytics, ever.
 - **Money is integer rupiah, never floats.** IDR is zero-decimal in Stripe;
   the `subscriptions`/`payments` tables and all display use whole rupiah
   ("Rp 59.000", dot separators, formatted by hand so the format never
@@ -253,3 +286,6 @@ text pair at 4.5:1 or more in both looks.
   structured stubs that answer 501 until built).
 - Stripe returns the browser to the path `/vip/return` (no hash); the
   client's router handles it alongside the hash routes.
+- Avoid adding new dependencies; the stack is Express, pg and Tailwind
+  (hls.js is the one accepted exception, for HLS playback). Payments add none:
+  see the payments note above.
