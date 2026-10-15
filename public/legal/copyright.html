@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Copyright · HomeClip</title>
+  <meta name="description" content="How to report a copyright concern in HomeClip.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect x='8' y='14' width='84' height='60' rx='10' fill='%23181512'/><rect x='16' y='22' width='68' height='44' rx='6' fill='%23fbbf24'/><rect x='40' y='80' width='20' height='8' rx='3' fill='%23181512'/></svg>">
+  <link rel="stylesheet" href="/tailwind.css">
+  <link rel="stylesheet" href="/screens.css">
+  <script src="/usernode-bridge/v1/bridge.js"></script>
+  <script>
+    (function () {
+      var media = window.matchMedia('(prefers-color-scheme: dark)');
+      function applyTheme() {
+        var theme = (window.usernode && window.usernode.theme) || (media.matches ? 'dark' : 'light');
+        document.documentElement.classList.toggle('dark', theme === 'dark');
+        document.documentElement.style.colorScheme = theme;
+      }
+      applyTheme();
+      window.addEventListener('usernode:theme-changed', applyTheme);
+      media.addEventListener('change', applyTheme);
+    })();
+  </script>
+  <style>
+    .legal {max-width:640px;margin:0 auto;padding:24px 20px 48px}
+    .legal h1 {font-size:28px;line-height:34px;font-weight:700;margin:8px 0 4px}
+    .legal h2 {font-size:20px;line-height:28px;font-weight:600;margin:24px 0 8px}
+    .legal p, .legal li {font-size:16px;line-height:24px;color:rgb(var(--fg))}
+    .legal ul {list-style:disc;padding-inline-start:24px;margin:8px 0}
+    .legal .upd {font-size:14px;color:rgb(var(--muted))}
+    .legal a {color:rgb(var(--accent))}
+  </style>
+</head>
+<body class="min-h-screen bg-ground text-fg" style="font-family:ui-rounded,system-ui,sans-serif">
+  <main class="legal">
+    <p><a href="/">Back to HomeClip</a></p>
+    <h1>Copyright</h1>
+    <p class="upd">Last updated: October 2026</p>
+    <p>HomeClip is a catalogue a homeroom keeps together. It plays no video of its own and stores no video files. Episodes carry links to wherever they are watched, and the videos behind those links are served by their own sources, not by HomeClip.</p>
+
+    <h2>If you hold a concern</h2>
+    <p>If you believe a drama, an episode or a link in HomeClip points to your work without permission, tell the group's admins and it will be looked at. The quickest way is the Report button next to the drama or episode in the app: reports are recorded with who sent them, what they point at, and a reason.</p>
+    <p>For a formal notice, write to the designated agent:</p>
+    <ul>
+      <li><strong>DMCA agent:</strong> [DMCA agent name]</li>
+      <li><strong>Email:</strong> <a href="mailto:[dmca email]">[dmca email]</a></li>
+    </ul>
+    <p>Include: the work you believe is infringed, the drama or episode in HomeClip it shows up in (its title and season and episode number are enough), your contact details, a statement of good-faith belief, and a statement, under penalty of perjury, that the information is accurate and you are the right holder or authorised to act for them, plus your signature.</p>
+
+    <h2>What happens then</h2>
+    <p>Nothing is hidden automatically: a report is recorded for the group's admins, who decide with the person who added the item. When a link is plainly unauthorised, it is removed. A person whose item was removed can reply to the admins with their own statement.</p>
+
+    <h2>Repeat concerns</h2>
+    <p>Members who repeatedly add unauthorised links can be asked to leave the homeroom by its admins.</p>
+  </main>
+</body>
+</html>
