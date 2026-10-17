@@ -123,6 +123,13 @@ export async function render({ view, params, query }) {
           '<button type="button" class="btn-secondary" data-paywall-back>' + t('common.back') + '</button>' +
         '</div>' +
       '</div>' +
+      // Streaming unavailable: an unlocked episode whose record carries no
+      // authorized video URL. A clear state instead of a fake player.
+      '<div class="absolute inset-0 z-10 hidden flex-col items-center justify-center gap-2 bg-black/85 p-6 text-center" data-unavail>' +
+        '<p class="text-heading text-white">' + t('player.unavailable') + '</p>' +
+        '<p class="text-small text-white/70">' + t('player.unavailableBody') + '</p>' +
+        '<button type="button" class="btn-secondary mt-2" data-unavail-back>' + t('common.back') + '</button>' +
+      '</div>' +
       // Bottom controls.
       '<div class="hc-player-controls" data-controlswrap>' +
         '<div class="px-1"><input class="hc-seek w-full" type="range" min="0" max="1000" value="0" step="1" aria-label="' + t('player.seek') + '"></div>' +
@@ -153,6 +160,7 @@ export async function render({ view, params, query }) {
   const endedTitle = stage.querySelector('[data-ended-title]');
   const endedActions = stage.querySelector('[data-ended-actions]');
   const paywall = stage.querySelector('[data-paywall]');
+  const unavail = stage.querySelector('[data-unavail]');
   const controlsWrap = stage.querySelector('[data-controlswrap]');
   const epLabel = stage.querySelector('[data-eplabel]');
   const timeLabel = stage.querySelector('[data-time]');
@@ -184,6 +192,7 @@ export async function render({ view, params, query }) {
   let spinnerOn = false;
   let errorShown = false;
   let lockedUi = false;
+  let unavailUi = false;
   let countdownTimer = null;
 
   // Restored volume/mute (element properties survive episode switches, but
@@ -218,9 +227,9 @@ export async function render({ view, params, query }) {
     const paused = video.paused || video.ended;
     playBtn.innerHTML = icon(paused ? 'play' : 'pause');
     playBtn.setAttribute('aria-label', paused ? t('player.play') : t('player.pause'));
-    const showBig = paused && !spinnerOn && !errorShown && !lockedUi;
+    const showBig = paused && !spinnerOn && !errorShown && !lockedUi && !unavailUi;
     bigPlay.classList.toggle('hidden', !showBig);
-    spinner.classList.toggle('hidden', !spinnerOn || errorShown || lockedUi);
+    spinner.classList.toggle('hidden', !spinnerOn || errorShown || lockedUi || unavailUi);
   }
 
   function setSpinner(on) {
@@ -243,7 +252,7 @@ export async function render({ view, params, query }) {
   // The stage is dead (all sources failed / HLS fell over with no
   // fallback): a message and Retry, never a silent black box.
   function showError() {
-    if (errorShown || lockedUi || dead) return;
+    if (errorShown || lockedUi || unavailUi || dead) return;
     errorShown = true;
     spinnerOn = false;
     endedTitle.textContent = t('player.errorTitle');
@@ -273,6 +282,23 @@ export async function render({ view, params, query }) {
     paywall.classList.remove('flex');
     controlsWrap.classList.remove('hidden');
     updateStageUi();
+  }
+
+  function showUnavailable() {
+    unavailUi = true;
+    hideError();
+    cancelCountdown();
+    unavail.classList.remove('hidden');
+    unavail.classList.add('flex');
+    controlsWrap.classList.add('hidden');
+    updateStageUi();
+  }
+
+  function hideUnavailable() {
+    unavailUi = false;
+    unavail.classList.add('hidden');
+    unavail.classList.remove('flex');
+    controlsWrap.classList.remove('hidden');
   }
 
   // Append the webm/mp4 pair for an extensionless clip URL. The WebM source
@@ -333,6 +359,10 @@ export async function render({ view, params, query }) {
     // is the stage. Episode rows and badges still navigate here on purpose.
     if (src.locked) { showPaywall(); return; }
     hidePaywall();
+    // An unlocked episode with no video URL: no authorized source exists,
+    // so the stage says so instead of pretending to play.
+    if (!src.videoUrl) { showUnavailable(); return; }
+    hideUnavailable();
 
     if (isHlsUrl(src.videoUrl)) {
       attachHls(src, autoplay);
@@ -674,10 +704,13 @@ export async function render({ view, params, query }) {
   stage.querySelector('[data-back]').addEventListener('click', () => {
     cancelCountdown();
     saveNow();
-    navigate('/drama/' + d.id);
+    navigate('/drama/' + d.id + demoQ);
   });
   stage.querySelector('[data-paywall-back]').addEventListener('click', () => {
-    navigate('/drama/' + d.id);
+    navigate('/drama/' + d.id + demoQ);
+  });
+  stage.querySelector('[data-unavail-back]').addEventListener('click', () => {
+    navigate('/drama/' + d.id + demoQ);
   });
 
   // Space bar toggles playback (desktop convenience).

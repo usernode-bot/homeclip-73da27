@@ -457,6 +457,11 @@ async function seedViewerDemoProfiles(userId) {
 
 const DRAMA_FIELDS = 'd.id, d.title, d.original_title, d.alternative_titles, d.poster_url, d.backdrop_url, d.year, d.country, d.language, d.genres, d.genres_raw, d.rating, d.popularity, d.featured, d.cast_names, d.director, d.total_episodes, d.episode_duration_min, d.content_type, d.tmdb_id, d.source_url, d.verified, d.needs_review, d.review_reason, d.is_trending, d.is_demo, d.synopsis_en, d.synopsis_id';
 
+// The catalog's genre vocabulary: what a filter may ask for and what a
+// manual record may carry. Providers/tmdb.js maps provider genre names onto
+// this same list, and the frontend's chips read it from i18n.
+const CATALOG_GENRES = ['romance', 'thriller', 'fantasy', 'comedy', 'historical', 'action', 'drama', 'youth'];
+
 // ── API ───────────────────────────────────────────────────────────────────
 
 app.get('/api/me', async (req, res) => {
@@ -568,7 +573,41 @@ app.delete('/api/profiles/:id', async (req, res) => {
 app.get('/api/home', async (req, res) => {
   const demo = wantsDemo(req);
   const demoFilter = catalogDemoWhere(demo);
-  const [featured, trending, series, recent, top10, shorts, cont] = await Promise.all([
+  if (demo && req.user) await seedDemoCatalogViewer(req.user);
+  // Recommended for You: dramas sharing a genre with what the viewer has
+  // watched or saved, best rated first, excluding what those rows already
+  // show. Without that history (or for a guest) it falls back to the
+  // catalog's top-rated dramas — a honest default, not a fake signal.
+  let recommendedSql;
+  let recommendedParams;
+  if (req.user) {
+    const g = await pool.query(
+      `SELECT DISTINCT unnest(d.genres) AS g
+       FROM (
+         SELECT drama_id FROM watch_progress WHERE user_id = $1 ${demo ? '' : 'AND is_demo = false'}
+         UNION SELECT drama_id FROM my_list WHERE user_id = $1 ${demo ? '' : 'AND is_demo = false'}
+       ) a JOIN dramas d ON d.id = a.drama_id`,
+      [req.user.id]
+    );
+    const preferred = g.rows.map((r) => r.g);
+    if (preferred.length) {
+      recommendedSql = `SELECT ${DRAMA_FIELDS} FROM dramas d
+         WHERE true${demoFilter} AND d.genres && $1::text[] AND NOT (
+           d.id IN (SELECT drama_id FROM watch_progress WHERE user_id = $2 ${demo ? '' : 'AND is_demo = false'})
+           OR d.id IN (SELECT drama_id FROM my_list WHERE user_id = $2 ${demo ? '' : 'AND is_demo = false'}))
+         ORDER BY d.rating DESC, d.popularity DESC LIMIT 12`;
+      recommendedParams = [preferred, req.user.id];
+    }
+  }
+  if (!recommendedSql) {
+    recommendedSql = `SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter}
+       ORDER BY d.rating DESC, d.popularity DESC LIMIT 12`;
+    recommendedParams = [];
+  }
+  // One row per genre the catalog actually has: a genre with no dramas
+  // contributes no row, so nothing renders empty.
+  const GENRE_ROW_KEYS = CATALOG_GENRES;
+  const [featured, trending, series, recent, top10, shorts, cont, list, ...genreQs] = await Promise.all([
     pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE featured IS NOT NULL${demoFilter} ORDER BY featured LIMIT 5`),
     // Trending: the editorial is_trending pin over the popularity signal.
     pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter} ORDER BY d.is_trending DESC, d.popularity DESC LIMIT 12`),
@@ -589,15 +628,33 @@ app.get('/api/home', async (req, res) => {
            ORDER BY w.updated_at DESC LIMIT 12`,
           [req.user.id])
       : { rows: [] },
+    req.user
+      ? pool.query(
+          `SELECT ${DRAMA_FIELDS}, m.added_at
+           FROM my_list m JOIN dramas d ON d.id = m.drama_id
+           WHERE m.user_id = $1 ${demo ? '' : 'AND m.is_demo = false'}${demoFilter}
+           ORDER BY m.added_at DESC LIMIT 12`,
+          [req.user.id])
+      : { rows: [] },
+    ...GENRE_ROW_KEYS.map((g) =>
+      pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE $1 = ANY(d.genres)${demoFilter} ORDER BY d.popularity DESC, d.rating DESC LIMIT 12`, [g])),
   ]);
+  const genreRows = GENRE_ROW_KEYS
+    .map((genre, i) => ({ genre, items: genreQs[i].rows }))
+    .filter((r) => r.items.length);
   res.json({
     featured: featured.rows,
     trending: trending.rows,
+    recommended: recommendedParams.length
+      ? (await pool.query(recommendedSql, recommendedParams)).rows
+      : (await pool.query(recommendedSql)).rows,
     series: series.rows,
     recent: recent.rows,
     top10: top10.rows,
     shortDramas: shorts.rows,
     continue: cont.rows,
+    watchlist: list.rows,
+    genreRows,
   });
 });
 
@@ -610,7 +667,7 @@ app.get('/api/dramas', async (req, res) => {
   const where = [];
   const params = [];
   if (!demo) where.push('NOT d.is_demo');
-  if (genre && ['romance', 'thriller', 'fantasy', 'comedy', 'historical', 'action', 'drama'].includes(genre)) {
+  if (genre && CATALOG_GENRES.includes(genre)) {
     params.push(genre); where.push(`$${params.length} = ANY(d.genres)`);
   }
   if (country && /^[a-z]{2}$/.test(country)) {
@@ -644,6 +701,7 @@ app.get('/api/dramas', async (req, res) => {
 app.get('/api/dramas/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'not_found' });
+  if (wantsDemo(req) && req.user) await seedDemoCatalogViewer(req.user);
   const d = await pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.id = $1`, [id]);
   if (d.rowCount === 0) return res.status(404).json({ error: 'not_found' });
   // Staging demo rows stay behind ?demo=1, like the list routes.
@@ -678,7 +736,17 @@ app.get('/api/dramas/:id', async (req, res) => {
       fallback_url: locked ? null : e.fallback_url,
     };
   });
-  res.json({ drama: d.rows[0], episodes, inMyList, progress });
+  // More like this: dramas sharing a genre with this one (more shared
+  // genres rank higher), then the same country, then popularity.
+  const me = d.rows[0];
+  const similar = await pool.query(
+    `SELECT ${DRAMA_FIELDS} FROM dramas d
+     WHERE d.id <> $1${catalogDemoWhere(wantsDemo(req))} AND (d.genres && $2::text[] OR d.country = $3)
+     ORDER BY (SELECT count(*) FROM unnest(d.genres) g WHERE g = ANY($2::text[])) DESC,
+       (d.country = $3)::int DESC, d.popularity DESC, d.rating DESC LIMIT 12`,
+    [id, me.genres || [], me.country || '']
+  );
+  res.json({ drama: me, episodes, inMyList, progress, similar: similar.rows });
 });
 
 // Wrap an async handler so a rejected promise answers 500 JSON instead of
@@ -893,7 +961,7 @@ app.post('/api/admin/dramas/import', h(async (req, res) => {
     const country = /^[a-z]{2}$/.test(String(b.country || '')) ? String(b.country) : '';
     const synopsis = String(b.synopsis || '').slice(0, 2000);
     const genres = Array.isArray(b.genres)
-      ? b.genres.filter((g) => ['romance', 'thriller', 'fantasy', 'comedy', 'historical', 'action', 'drama'].includes(g))
+      ? b.genres.filter((g) => CATALOG_GENRES.includes(g))
       : [];
     const nxt = await pool.query('SELECT COALESCE(MAX(id), 0) + 1 AS n FROM dramas');
     const id = nxt.rows[0].n;
@@ -1144,7 +1212,7 @@ app.get('/api/facets', async (req, res) => {
 // drama itself (genre-hued gradient, a quiet pattern, the title). No
 // copyrighted artwork anywhere. Served OUTSIDE /api/ on purpose: <img> tags
 // cannot attach the auth header, and generated poster art is not sensitive.
-const GENRE_HUES = { romance: 335, thriller: 255, fantasy: 200, comedy: 28, historical: 165, action: 280 };
+const GENRE_HUES = { romance: 335, thriller: 255, fantasy: 200, comedy: 28, historical: 165, action: 280, youth: 150 };
 
 function escapeXml(s) {
   return s.replace(/[<>&'"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[c]));
@@ -2543,6 +2611,160 @@ async function seedStagingVip() {
   );
 }
 
+// ── Staging demo catalog ──────────────────────────────────────────────────
+// The streaming catalog ships EMPTY and nothing reseeds it (see the October
+// 2026 wipe): new dramas arrive only through the Posters studio. But a
+// staging preview of an empty catalog would show nothing to review, so —
+// like the tracker's demo dramas — staging seeds ten obviously fictional
+// Chinese dramas, fixed ids 820001-820010, is_demo = true. Every plain route
+// leaves is_demo rows out, so production reads stay production-shaped and
+// the existing empty-state tests keep passing. poster_url/backdrop_url are
+// NULL: the generated art renders, and no image URL is ever fabricated.
+const DEMO_CATALOG = [
+  { id: 820001, title: 'Lanterns Over Goose Hill', original: '鹅山灯火', year: 2025,
+    genres: ['historical', 'romance'], genresRaw: ['古装', '爱情'], rating: 8.7, pop: 98,
+    featured: 1, trending: true, type: 'series', eps: 16, dur: 45,
+    cast: ['Lin Wanqing', 'Shen Muyang', 'Gao Zhilan', 'Xu Beiming'],
+    director: 'Fang Yuran',
+    en: 'In 1930s Jiangnan, a lantern-maker\'s daughter trades her family\'s craft for a printing press — and collides with the reformist schoolteacher who prints on it.',
+    id_: 'Jiangnan tahun 1930-an: putri pembuat lentera menukar kerajinan keluarganya dengan mesin cetak, dan bertemu guru sekolah reformis yang mencetak di sana.' },
+  { id: 820002, title: 'Cloud Sword Chronicles', original: '云剑纪', year: 2024,
+    genres: ['fantasy', 'action'], genresRaw: ['玄幻', '动作'], rating: 8.2, pop: 95,
+    featured: null, trending: true, type: 'series', eps: 24, dur: 45,
+    cast: ['Qi Luochen', 'Bai Suxin', 'Tan Xiaohou', 'Mo Yunfei'],
+    director: 'Liang Chenghai',
+    en: 'A disgraced sword sect outcast climbs the Nine Cloud Peaks to reclaim a stolen blade, discovering the war between the sects was staged by the one master he trusted.',
+    id_: 'Seorang buangan sekte pedang mendaki Sembilan Puncak Awan untuk merebut kembali pedang curian, dan menemukan perang antar-sekte direkayasa oleh guru yang ia percayai.' },
+  { id: 820003, title: 'The Noodle Shop Next Door', original: '巷口面馆', year: 2025,
+    genres: ['comedy', 'romance'], genresRaw: ['喜剧', '爱情'], rating: 8.0, pop: 88,
+    featured: null, trending: false, type: 'series', eps: 12, dur: 40,
+    cast: ['Weng Xiaoman', 'Du Chengyi', 'Lu Pipa', 'Auntie Hao'],
+    director: 'Ruan Qiaosheng',
+    en: 'A food critic who torched a noodle shop in a review is sentenced by the internet to eat there every day for a year. The owner keeps count, and keeps score.',
+    id_: 'Kritikus makanan yang menghancurkan kedai mi dalam ulasannya dihukum internet untuk makan di sana setiap hari selama setahun.' },
+  { id: 820004, title: 'Midnight at Perfume House', original: '香阁夜话', year: 2023,
+    genres: ['thriller', 'drama'], genresRaw: ['悬疑', '剧情'], rating: 7.9, pop: 84,
+    featured: null, trending: false, type: 'series', eps: 20, dur: 45,
+    cast: ['Song Liuli', 'He Jinglan', 'Master Wei', 'Xiao Cui'],
+    director: 'Kang Weizhi',
+    en: 'Every midnight the 1930s perfume house blends one more scent for one more client — and every scent, the police later find, belongs to a missing person.',
+    id_: 'Setiap tengah malam rumah parfum tahun 1930-an meracik satu wewangian lagi untuk satu klien lagi — dan setiap wewangian ternyata milik orang yang hilang.' },
+  { id: 820005, title: 'Paper Cranes in Spring', original: '春日纸鹤', year: 2026,
+    genres: ['youth', 'romance'], genresRaw: ['青春', '爱情'], rating: 8.4, pop: 90,
+    featured: null, trending: false, type: 'series', eps: 16, dur: 40,
+    cast: ['Cheng Yuwei', 'Nan Qiao', 'Fei Dongdong', 'Teacher Gu'],
+    director: 'Bai Luoshan',
+    en: 'Two rival cram-school students fold paper cranes with exam wishes into the same library book for a year, never knowing the other is the person they sit behind.',
+    id_: 'Dua siswa bimbingan bersaing melipat origami berisi harapan ujian ke buku perpustakaan yang sama selama setahun, tanpa tahu mereka duduk bersebelahan.' },
+  { id: 820006, title: 'Wolf General of the Northern Pass', original: '北关狼将', year: 2022,
+    genres: ['action', 'historical'], genresRaw: ['动作', '古装'], rating: 7.6, pop: 80,
+    featured: null, trending: false, type: 'series', eps: 30, dur: 45,
+    cast: ['Huo Zhanbei', 'Princess Yelü', 'General Deng', 'Old Shi'],
+    director: 'Qin Hanjue',
+    en: 'The empire\'s exiled wolf general is recalled to hold the Northern Pass with a garrison of convicts, against a horde that knows his every tactic — because he taught it.',
+    id_: 'Jenderal serigala yang diasingkan dipanggil kembali untuk mempertahankan Gerbang Utara dengan pasukan tahanan, melawan musuh yang mengenal semua taktiknya.' },
+  { id: 820007, title: 'The Jade Mirror Case', original: '玉镜奇案', year: 2024,
+    genres: ['thriller', 'historical'], genresRaw: ['悬疑', '古装'], rating: 8.1, pop: 86,
+    featured: null, trending: false, type: 'series', eps: 18, dur: 45,
+    cast: ['Coroner Shen', 'Magistrate Pei', 'Widow Cui', 'Little An'],
+    director: 'Tang Shuyi',
+    en: 'A Tang-dynasty coroner who reads corpses and a magistrate who reads people work nine impossible cases, each one hiding a piece of the same jade mirror.',
+    id_: 'Tabib penggeledah dinasti Tang dan hakim yang membaca manusia menangani sembilan kasus mustahil, yang masing-masing menyimpan potongan cermin giok yang sama.' },
+  { id: 820008, title: 'Six Minutes to Fall in Love', original: '恋爱六分钟', year: 2025,
+    genres: ['romance'], genresRaw: ['爱情'], rating: 7.4, pop: 72,
+    featured: null, trending: false, type: 'short', eps: 8, dur: 6,
+    cast: ['Jiang Tingting', 'Ferryman No. 7', 'Baozi Granny', 'Raincoat Man'],
+    director: 'Yuan Xiaoman',
+    en: 'A city ferry ride takes six minutes. He has one season of six-minute episodes to make the commuter who sleeps through every stop miss her stop on purpose.',
+    id_: 'Perjalanan feri kota hanya enam menit. Ia punya satu musim untuk membuat penumpang yang selalu tertidur sengaja melewatkan pemberhentiannya.' },
+  { id: 820009, title: 'The Intern God of Wealth', original: '财神实习中', year: 2026,
+    genres: ['comedy', 'fantasy'], genresRaw: ['喜剧', '玄幻'], rating: 7.2, pop: 70,
+    featured: null, trending: false, type: 'short', eps: 10, dur: 7,
+    cast: ['Zhao Jinbao', 'Auditor Mei', 'Landlord Qian', 'The Debit Demon'],
+    director: 'Cui Dada',
+    en: 'Heaven\'s worst accountant is sent to a failing corner shop as an intern god of wealth: one month, one ledger, and every blessing he grants deducts from his own score.',
+    id_: 'Akuntan surga yang terburuk dikirim ke toko kelontong yang sekarat sebagai dewa kekayaan magang: setiap berkah yang ia berikan mengurangi nilainya sendiri.' },
+  { id: 820010, title: 'Campus Diary: Exam Week', original: '校园日记·考试周', year: 2026,
+    genres: ['youth'], genresRaw: ['青春'], rating: 7.0, pop: 66,
+    featured: null, trending: false, type: 'short', eps: 6, dur: 8,
+    cast: ['Gao Feifei', 'Monitor Zhou', 'Canteen Uncle', 'The Physics Paper'],
+    director: 'Lin Shuwan',
+    en: 'Six days before the gaokao, five classmates film one diary entry a night — a pact that outlives the exam and the year they thought would end everything.',
+    id_: 'Enam hari sebelum ujian negara, lima siswa merekam satu entri buku harian setiap malam — janji yang bertahan lebih lama dari ujian itu sendiri.' },
+];
+
+async function seedDemoCatalog() {
+  for (const s of DEMO_CATALOG) {
+    await pool.query(
+      `INSERT INTO dramas
+         (id, title, original_title, year, country, language, genres, genres_raw,
+          rating, popularity, featured, is_trending, is_demo, content_type,
+          total_episodes, episode_duration_min, cast_names, director,
+          synopsis_en, synopsis_id, verified, needs_review)
+       VALUES ($1, $2, $3, $4, 'cn', 'zh', $5, $6, $7, $8, $9, $10, true, $11,
+               $12, $13, $14, $15, $16, $17, false, false)
+       ON CONFLICT (id) DO NOTHING`,
+      [s.id, s.title, s.original, s.year, s.genres, s.genresRaw, s.rating, s.pop,
+        s.featured, s.trending, s.type, s.eps, s.dur, s.cast, s.director, s.en, s.id_]
+    );
+    for (let n = 1; n <= s.eps; n++) {
+      // Same pool assignment the imports use: a stride coprime with 6, so
+      // every demo drama cycles all six committed clips.
+      const video = VIDEO_BASE + VIDEO_POOL[(s.id * 5 + n) % VIDEO_POOL.length];
+      // Wolf General locks everything from episode 2 so the VIP paywall can
+      // be seen on a demo route; Campus Diary episode 3 has no video URL, so
+      // the player shows its streaming-unavailable state.
+      const access = s.id === 820006 && n >= 2 ? 'vip' : 'free';
+      const url = s.id === 820010 && n === 3 ? '' : video;
+      await pool.query(
+        `INSERT INTO episodes (drama_id, num, duration_min, video_url, access)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (drama_id, num) DO NOTHING`,
+        [s.id, n, s.dur, url, access]
+      );
+    }
+  }
+}
+
+// On the first ?demo=1 request of the viewing account, write its demo
+// progress and list rows, once, with fixed keys: two half-watched dramas
+// (Continue Watching) and two saved dramas (My List, and the genres that
+// drive Recommended for You). Idempotent; what the viewer does to them stays.
+const demoCatalogSeedPending = new Map();
+
+async function seedDemoCatalogViewer(user) {
+  const key = String(user.id);
+  if (demoCatalogSeedPending.has(key)) return demoCatalogSeedPending.get(key);
+  const p = (async () => {
+    const has = await pool.query(
+      `SELECT 1 FROM watch_progress WHERE user_id = $1 AND drama_id = 820001`, [user.id]
+    );
+    if (!has.rows.length) {
+      await pool.query(
+        `INSERT INTO watch_progress (user_id, drama_id, ep, seconds, duration, updated_at, is_demo)
+         VALUES ($1, 820001, 5, 620, 2700, now() - interval '2 hours', true),
+                ($1, 820005, 2, 95, 2400, now() - interval '3 days', true)
+         ON CONFLICT (user_id, drama_id) DO NOTHING`,
+        [user.id]
+      );
+      await pool.query(
+        `INSERT INTO my_list (user_id, drama_id, added_at, is_demo)
+         VALUES ($1, 820002, now() - interval '1 day', true),
+                ($1, 820007, now() - interval '5 days', true)
+         ON CONFLICT (user_id, drama_id) DO NOTHING`,
+        [user.id]
+      );
+    }
+  })();
+  demoCatalogSeedPending.set(key, p);
+  try {
+    await p;
+  } catch (err) {
+    console.error('demo catalog viewer seed failed', err);
+    demoCatalogSeedPending.delete(key);
+  }
+}
+
 // ── API routes ────────────────────────────────────────────────────────────
 
 // Who is signed in, if anyone (the page asks, not the URL: at the app's own
@@ -3602,6 +3824,7 @@ async function start() {
     try {
       await seedTrackerDemo();
       await seedSampleDramas();
+      await seedDemoCatalog();
       await seedStagingVip();
     } catch (err) {
       console.error('staging demo seed failed', err);

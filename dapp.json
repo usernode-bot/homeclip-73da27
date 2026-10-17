@@ -63,7 +63,10 @@
     { "id": "add.screen", "name": "Add a drama screen", "path": "/add", "expectText": "Add a drama", "expectSelector": "input[type='file'][accept='image/jpeg,image/png,image/webp']", "visual": true, "impact": ["public/js/views/add.js", "public/js/views/profile.js", "public/js/router.js", "styles/**"] },
     { "id": "posters.studio", "name": "Poster studio renders", "path": "/posters", "expectText": "Poster search", "expectSelector": "input[type='search']", "visual": true, "impact": ["public/js/views/posters.js", "public/js/views/profile.js", "public/js/router.js", "public/js/i18n.js", "server.js", "providers/**"] },
     { "id": "posters.scan", "name": "Studio artwork scan controls", "path": "/posters?demo=1", "expectText": "Check all artwork", "allowConsoleErrors": true, "visual": true, "impact": ["server.js", "public/js/views/posters.js", "public/js/i18n.js"] },
-    { "name": "Studio lists records without artwork", "path": "/posters?demo=1", "expectText": "No artwork yet" }
+    { "name": "Studio lists records without artwork", "path": "/posters?demo=1", "expectText": "No artwork yet" },
+    { "id": "home-demo-rows", "name": "Home demo catalog rows", "path": "/?demo=1", "expectText": "Recommended for You", "visual": true, "impact": ["server.js", "public/js/views/home.js", "public/js/ui.js", "public/js/i18n.js", "styles/**"] },
+    { "name": "Drama detail shows similar dramas", "path": "/drama/820001?demo=1", "expectText": "More like this" },
+    { "name": "Player shows streaming unavailable state", "path": "/watch/820010/3?demo=1", "expectText": "Streaming unavailable" }
   ],
   "visibility": {
     "build": "public",
