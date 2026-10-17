@@ -2,7 +2,7 @@
 // horizontal rows (Continue Watching, Trending Now, New Episodes, Top 10).
 
 import { api } from '../api.js';
-import { el, dramaCard, hRow, skeletonHome, errorState, icon, metaLine } from '../ui.js';
+import { el, dramaCard, hRow, skeletonHome, errorState, emptyState, icon, metaLine } from '../ui.js';
 import { artImg, bannerArt, backdropArt, backdropFallback, posterFallback, lqipArt } from '../art.js';
 import { t, genreLabel, GENRES } from '../i18n.js';
 import { navigate } from '../router.js';
@@ -200,7 +200,10 @@ export async function render({ view, query }) {
       }))
     ));
   }
-  view.appendChild(hRow(t('home.trending'), data.trending.map((d) => dramaCard(d, { href: hrefD(d) }))));
+  const trendingRow = (data.trending || []).filter(Boolean);
+  if (trendingRow.length) {
+    view.appendChild(hRow(t('home.trending'), trendingRow.map((d) => dramaCard(d, { href: hrefD(d) }))));
+  }
   // Popular Series: the catalog's series, most popular first — the shorts'
   // counterpart row. Hidden when the catalog has none, like the shorts row.
   const seriesRow = (data.series || []).filter(Boolean);
@@ -215,6 +218,19 @@ export async function render({ view, query }) {
   }
   // Recently Added: the newest catalog entries first, so a drama a curator
   // just imported leads the row.
-  view.appendChild(hRow(t('home.recent'), (data.recent || []).map((d) => dramaCard(d, { href: hrefD(d) }))));
-  view.appendChild(hRow(t('home.top10'), data.top10.map((d, i) => dramaCard(d, { rank: i + 1, href: hrefD(d) }))));
+  const recentRow = (data.recent || []).filter(Boolean);
+  if (recentRow.length) {
+    view.appendChild(hRow(t('home.recent'), recentRow.map((d) => dramaCard(d, { href: hrefD(d) }))));
+  }
+  const topRow = (data.top10 || []).filter(Boolean);
+  if (topRow.length) {
+    view.appendChild(hRow(t('home.top10'), topRow.map((d, i) => dramaCard(d, { rank: i + 1, href: hrefD(d) }))));
+  }
+
+  // Nothing in the catalog yet (and nothing to continue): the search and
+  // the genre chips above stay, the rows are gone, and one quiet empty
+  // state says where the content would be.
+  if (!data.featured.length && !continueRow.length && !trendingRow.length) {
+    view.appendChild(emptyState(t('home.empty'), t('home.emptyBody')));
+  }
 }
