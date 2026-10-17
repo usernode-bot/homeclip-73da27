@@ -35,6 +35,14 @@ const REAL_CATALOG = [
   { title: 'Girl from Nowhere', year: 2018, country: 'th', popularity: 68, featured: 5, isTrending: true },
   { title: '2gether', year: 2020, country: 'th', popularity: 56 },
   { title: 'Garis Waktu', year: 2022, country: 'id', popularity: 54 },
+  // noSampleVideo: no licensed streaming source exists for this show, so its
+  // episodes are imported with video_url NULL — the player shows the honest
+  // "Episode unavailable" state instead of standing in a sample clip for a
+  // real show. watchUrl is the show's page on its authorized streamer (the
+  // Youku original); the player links there when a licensed source is still
+  // missing. Licensed episode URLs, when the app ever acquires them, are set
+  // on episodes.video_url by hand.
+  { title: 'The First Frost', year: 2025, country: 'cn', tmdbId: 250060, popularity: 80, noSampleVideo: true, watchUrl: 'https://v.youku.com/v_show/id_XNjQ1NDI4ODY2MA==.html' },
 ];
 
 module.exports = { REAL_CATALOG };

@@ -88,7 +88,11 @@ async function searchTv(q) {
 async function getTv(tmdbId) {
   const raw = await call('/tv/' + tmdbId, {
     append_to_response: 'images,alternative_titles,credits',
-    include_image_language: 'en,null',
+    // 'zh' joins en/null so a C-drama's official Chinese-language poster is
+    // in the record's own selectable list — without it such imports would
+    // find no poster at all and fall back to generated art. The import's
+    // fail-closed path validation is unchanged either way.
+    include_image_language: 'en,null,zh',
   });
   const cfgC = await imageConfig();
   return {

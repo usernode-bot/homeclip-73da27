@@ -58,7 +58,7 @@ const STRINGS = {
     'detail.episodes': 'Episodes',
     'detail.showMore': 'Show more',
     'detail.showLess': 'Show less',
-    'detail.play': 'Play',
+    'detail.play': 'Watch now',
     'detail.resume': 'Continue EP {n}',
     'detail.add': 'Add to My List',
     'detail.added': 'In My List',
@@ -127,6 +127,9 @@ const STRINGS = {
     'player.vipTitle': 'This episode is for VIP',
     'player.vipBody': 'Unlock every episode of the featured dramas by joining VIP.',
     'player.vipPlans': 'Go to VIP plans',
+    'player.unavailableTitle': 'Episode unavailable',
+    'player.unavailableBody': 'No licensed video source for this episode yet.',
+    'player.unavailableLink': 'Watch on Youku',
 
     'demo.note': 'Staging demo',
 
@@ -294,7 +297,7 @@ const STRINGS = {
     'detail.episodes': 'Episode',
     'detail.showMore': 'Tampilkan lebih banyak',
     'detail.showLess': 'Tampilkan lebih sedikit',
-    'detail.play': 'Putar',
+    'detail.play': 'Tonton sekarang',
     'detail.resume': 'Lanjut EP {n}',
     'detail.add': 'Tambah ke Daftar Saya',
     'detail.added': 'Ada di Daftar Saya',
@@ -363,6 +366,9 @@ const STRINGS = {
     'player.vipTitle': 'Episode ini khusus VIP',
     'player.vipBody': 'Buka semua episode drama unggulan dengan bergabung VIP.',
     'player.vipPlans': 'Ke paket VIP',
+    'player.unavailableTitle': 'Episode tidak tersedia',
+    'player.unavailableBody': 'Belum ada sumber video berlisensi untuk episode ini.',
+    'player.unavailableLink': 'Tonton di Youku',
 
     'demo.note': 'Demo staging',
 
