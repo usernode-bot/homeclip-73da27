@@ -34,6 +34,8 @@ const STRINGS = {
     'home.browseGenres': 'Browse by genre',
     'home.play': 'Play',
     'home.short': 'Short dramas',
+    'home.watchlist': 'My List',
+    'home.recommended': 'Recommended for You',
 
     'search.title': 'Search',
     'search.empty': 'No dramas found.',
@@ -56,6 +58,7 @@ const STRINGS = {
     'discover.loadMore': 'Load more',
 
     'detail.cast': 'Cast',
+    'detail.similar': 'More like this',
     'detail.synopsis': 'Synopsis',
     'detail.episodes': 'Episodes',
     'detail.showMore': 'Show more',
@@ -129,6 +132,8 @@ const STRINGS = {
     'player.vipTitle': 'This episode is for VIP',
     'player.vipBody': 'Unlock every episode of the featured dramas by joining VIP.',
     'player.vipPlans': 'Go to VIP plans',
+    'player.unavailable': 'Streaming unavailable',
+    'player.unavailableBody': 'No authorized video source is set for this episode yet. Try another episode or come back later.',
 
     'demo.note': 'Staging demo',
 
@@ -239,6 +244,7 @@ const STRINGS = {
     'genres.comedy': 'Comedy',
     'genres.historical': 'Historical',
     'genres.action': 'Action',
+    'genres.youth': 'Youth',
     'genres.drama': 'Drama',
   },
 
@@ -272,6 +278,8 @@ const STRINGS = {
     'home.browseGenres': 'Jelajahi per genre',
     'home.play': 'Putar',
     'home.short': 'Drama pendek',
+    'home.watchlist': 'Daftar Saya',
+    'home.recommended': 'Direkomendasikan untuk Anda',
 
     'search.title': 'Cari',
     'search.empty': 'Tidak ada drama ditemukan.',
@@ -294,6 +302,7 @@ const STRINGS = {
     'discover.loadMore': 'Muat lebih banyak',
 
     'detail.cast': 'Pemain',
+    'detail.similar': 'Mirip dengan ini',
     'detail.synopsis': 'Sinopsis',
     'detail.episodes': 'Episode',
     'detail.showMore': 'Tampilkan lebih banyak',
@@ -367,6 +376,8 @@ const STRINGS = {
     'player.vipTitle': 'Episode ini khusus VIP',
     'player.vipBody': 'Buka semua episode drama unggulan dengan bergabung VIP.',
     'player.vipPlans': 'Ke paket VIP',
+    'player.unavailable': 'Streaming tidak tersedia',
+    'player.unavailableBody': 'Belum ada sumber video resmi untuk episode ini. Coba episode lain atau datang kembali nanti.',
 
     'demo.note': 'Demo staging',
 
@@ -477,11 +488,12 @@ const STRINGS = {
     'genres.comedy': 'Komedi',
     'genres.historical': 'Sejarah',
     'genres.action': 'Aksi',
+    'genres.youth': 'Remaja',
     'genres.drama': 'Drama',
   },
 };
 
-export const GENRES = ['romance', 'drama', 'thriller', 'fantasy', 'comedy', 'historical', 'action'];
+export const GENRES = ['romance', 'drama', 'thriller', 'fantasy', 'comedy', 'historical', 'action', 'youth'];
 export const COUNTRIES = ['kr', 'jp', 'cn', 'th', 'id', 'my', 'ph', 'tr', 'in', 'uk', 'sg'];
 
 const COUNTRY_LABELS = {

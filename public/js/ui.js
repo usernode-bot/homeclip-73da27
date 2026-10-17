@@ -95,6 +95,7 @@ function buildCard(d, opts) {
   // The play badge jumps straight into the player: the stored episode when
   // the card carries progress (Continue Watching), episode 1 otherwise.
   const badgeEp = (progress && progress.ep) || 1;
+  const playHref = opts2.playHref || '/watch/' + d.id + '/' + badgeEp;
   const detailHref = opts2.href || '/drama/' + d.id;
   const html =
     // The card is a region with two links (poster/title → detail, badge →
@@ -105,7 +106,7 @@ function buildCard(d, opts) {
         artImg(d, { alt: d.title.replace(/"/g, '&quot;') }) +
         (opts2.rank ? '<span class="hc-rank">' + opts2.rank + '</span>' : '') +
         (opts2.play === false ? '' :
-          '<a class="hc-playbadge" data-nav href="/watch/' + d.id + '/' + badgeEp + '" aria-label="' + t('home.play') + '">' +
+          '<a class="hc-playbadge" data-nav href="' + playHref + '" aria-label="' + t('home.play') + '">' +
             icon('play', 'h-5 w-5') +
           '</a>') +
       '</span>' +
@@ -129,7 +130,8 @@ export function dramaCard(d, opts) {
   // from the cache (a short stable hash, not the whole URL).
   const artKey = d.poster_url ? 'u' + hashStr(d.poster_url) : '';
   const key = d.id + ':' + (o.rank || '') + ':' + (o.grid ? 'g' : 'r') + ':' +
-    (o.href ? 'w' : 'd') + ':' + (o.play === false ? 'n' : 'p') + ':' + artKey + ':' +
+    (o.href ? 'w' : 'd') + ':' + (o.play === false ? 'n' : 'p') + ':' +
+    (o.playHref ? 'q' : '') + ':' + artKey + ':' +
     (o.progress ? o.progress.ep + ':' + Math.round((o.progress.seconds || 0) / 1000) : '');
   let node = cardCache.get(key);
   if (!node) {
