@@ -512,10 +512,14 @@ export async function render({ view, query }) {
       });
       actions.appendChild(fix);
     }
+    // A link the server reports as unresolvable (poster_ok/backdrop_ok
+    // false) renders the placeholder straight away: the browser never
+    // requests a URL the record is already flagged over, so a broken stored
+    // link shows up as review state instead of a failed image load.
     const row = el(
       '<li><div class="list-row flex-wrap">' +
-        thumb(d.poster_url, 'w-12 shrink-0') +
-        thumbBg(d.backdrop_url, 'w-16 shrink-0') +
+        thumb(d.poster_ok === false ? null : d.poster_url, 'w-12 shrink-0') +
+        thumbBg(d.backdrop_ok === false ? null : d.backdrop_url, 'w-16 shrink-0') +
         '<span class="min-w-0 flex-1">' +
           '<span class="block truncate text-body font-medium text-fg">' + esc(d.title) + '</span>' +
           '<span class="block truncate text-small text-muted">' +
