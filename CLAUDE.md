@@ -102,13 +102,18 @@ My List and watch history, and a Profile with language and theme
 settings. The whole UI is bilingual (English / Bahasa Indonesia). No
 sign-up beyond the platform identity, no payments.
 
-The catalog has two layers. With `TMDB_API_KEY` set, the app seeds
-itself on boot with real dramas verified record-by-record against the
-TMDB API (curated list in `data/real-catalog.js`, import rules in
-`importVerifiedDrama`, acceptance script `npm run verify:posters`).
-The 30 invented sample dramas in `data/catalog.js` remain the no-key
-fallback and the `?demo=1` staging fixture, and are retired from plain
-reads once at least ten verified records exist.
+The catalog ships EMPTY. Every bundled movie and drama (the 30 invented
+sample dramas that used to live in `data/catalog.js`, the TMDB-curated
+boot seed that used to live in `data/real-catalog.js`, and the staging
+demo dramas) was removed in October 2026, together with the watch
+history and My List rows that pointed at it. The deletion ran exactly
+once per database through `wipeCatalogOnce` (server.js): a boot
+migration guarded by the `catalog-wipe-2026-10` marker row in
+`app_migrations`, so later restarts never touch dramas imported after
+it. Nothing reseeds catalog content. New dramas arrive only through the
+Posters studio (`/posters`, TMDB-verified import via
+`importVerifiedDrama`, acceptance script `npm run verify:posters`) and
+play from the committed six-clip pool in `public/sample/`.
 
 ## Design
 
@@ -121,11 +126,11 @@ reads once at least ten verified records exist.
   its provider poster (portrait 2:3) and provider backdrop (landscape);
   artwork URLs always come from the record's own provider image list —
   never a random or unrelated image. The chain below that: the
-  committed free-license photographs (picsum.photos, WebP under
-  `public/img/`), then the generated SVG art (`/poster/:id.svg`,
-  `/banner/:id.svg`, deterministic genre-hued gradients with a
-  play-glyph badge) which is titled for the drama, then the neutral
-  wordless placeholder as the last resort. The Continue Watching row
+  generated SVG art (`/poster/:id.svg`, `/banner/:id.svg`,
+  deterministic genre-hued gradients with a play-glyph badge) which is
+  titled for the drama, then the neutral wordless placeholder as the
+  last resort. An empty catalog shows Home's plain empty state ("No
+  dramas available yet"). The Continue Watching row
   carries a thin accent progress bar
   (`.hc-progress`) under the title.
   Play affordances (`.hc-playfab` on the banner, `.hc-playbadge` on
@@ -203,18 +208,10 @@ keeping every text pair at 4.5:1 or more in both looks.
   (server.js): it re-fetches the provider record and fails closed
   unless the confirmed title matches the provider's title OR original
   title (normalized) and the year matches, and artwork paths come from
-  THAT record's own image lists — the boot seed and the studio import
-  route share the same helper so the rules cannot drift. The boot seed
-  (`seedRealDramas`, concurrency 3, 20-second budget, idempotent,
-  resumes on the next boot) imports the curated `data/real-catalog.js`
-  list; a candidate whose title search returns no same-country,
-  within-one-year show is reported and skipped. Once
-  `realCatalogReady()` counts ten or more non-demo records with a
-  provider id, plain reads hide the sample dramas
-  (`sampleFilter(demo)`, applied in `/api/home`, `/api/dramas`,
-  `/api/dramas/:id`, `/api/my-list` and `/api/facets`); `?demo=1`
-  always sees everything. Verified detail pages carry the TMDB
-  attribution notice (`detail.tmdbNotice`).
+  THAT record's own image lists. The studio import route
+  (`POST /api/admin/dramas/import`) is the only writer of catalog
+  content; no boot seed exists any more. Verified detail pages carry
+  the TMDB attribution notice (`detail.tmdbNotice`).
 - **Acceptance check:** `npm run verify:posters`
   (`scripts/verify-posters.js`) re-fetches every provider-linked
   record and fails unless identity (title/original title, year,
@@ -239,18 +236,17 @@ keeping every text pair at 4.5:1 or more in both looks.
   `(d.id * 5 + i) % 6`, a stride coprime with 6 so every drama cycles all
   six clips). The player appends `.webm` and `.mp4` and offers both as
   `<source>` elements, WebM first, so a browser without H.264 still
-  decodes. Drama 1 points at an HLS `.m3u8` demo stream instead
-  (`https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8`, fallback
-  `/sample/bunny`): the player plays it natively on Safari and through
-  lazily-injected hls.js elsewhere, falling back to the same-origin clip
-  on a fatal HLS error. Episodes also carry `access` (`free`/`vip`) and
-  `fallback_url` columns; the final two episodes of the five featured
-  dramas (ids 1-4, 6) are VIP, and locked episodes leave
-  `/api/dramas/:id` without any video URL.
+  decodes; it also plays native HLS (Safari) and lazily-injected hls.js
+  elsewhere for `.m3u8` episode URLs. Episodes carry `access`
+  (`free`/`vip`) and `fallback_url` columns; imports create free
+  episodes, and a locked episode leaves `/api/dramas/:id` without any
+  video URL.
 - **Per-user tables are `staging:private`:** `my_list`, `watch_progress`,
-  `settings` and `profiles`. `?demo=1` (staging) seeds the viewing account
-  demo rows marked `is_demo`; responses without `?demo=1` exclude those
-  rows so plain routes stay production-shaped.
+  `settings` and `profiles`. `?demo=1` (staging) seeds the viewing
+  account's demo profiles (`seedViewerDemoProfiles`); catalog demo
+  dramas and their viewer demo rows are gone with the content wipe, and
+  responses without `?demo=1` still exclude any `is_demo` rows so plain
+  routes stay production-shaped.
 - **Profiles and Add a drama (catalog side):** `/profiles` is the signed-in
   account's "Who's watching?" picker (per-account `profiles` table,
   `/api/profiles` CRUD, cap of 5, last-profile guard; selection kept in

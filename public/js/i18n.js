@@ -24,6 +24,8 @@ const STRINGS = {
     'time.min': 'min',
 
     'home.search': 'Search dramas',
+    'home.empty': 'No dramas available yet',
+    'home.emptyBody': 'Check back soon!',
     'home.trending': 'Trending Now',
     'home.series': 'Popular Series',
     'home.recent': 'Recently Added',
@@ -260,6 +262,8 @@ const STRINGS = {
     'time.min': 'mnt',
 
     'home.search': 'Cari drama',
+    'home.empty': 'Belum ada drama',
+    'home.emptyBody': 'Nantikan segera!',
     'home.trending': 'Sedang Tren',
     'home.series': 'Serial Populer',
     'home.recent': 'Baru ditambahkan',
