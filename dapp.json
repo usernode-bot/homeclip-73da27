@@ -70,6 +70,8 @@
     { "name": "Discover grid shows original posters", "path": "/discover", "expectSelector": "img[src*='/img/poster/']" },
     { "name": "Drama detail shows backdrop", "path": "/drama/1", "expectSelector": ".hc-backdrop img[src*='/img/backdrop/']", "expectText": "Paper Lanterns at Dusk" },
     { "name": "Episode list shows stills", "path": "/drama/1", "expectSelector": ".hc-still img[src*='/img/still/']" },
+    { "name": "Sample drama art comes from its record (curated)", "path": "/drama/30", "expectText": "The Sunday Serial", "expectSelector": "img[src*='/img/poster/635-']" },
+    { "name": "Reassigned artwork: The Marble Season", "path": "/drama/28", "expectText": "The Marble Season", "expectSelector": "img[src*='/img/poster/344-']" },
     { "name": "Profiles populated demo", "path": "/profiles?demo=1", "expectText": "Who's watching?" },
     { "id": "posters.studio", "name": "Poster studio renders", "path": "/posters", "expectText": "Poster search", "expectSelector": "input[type='search']", "visual": true, "impact": ["public/js/views/posters.js", "public/js/views/profile.js", "public/js/router.js", "public/js/i18n.js", "server.js", "providers/**"] },
     { "name": "Home demo shows short dramas", "path": "/?demo=1", "expectText": "Short dramas" },

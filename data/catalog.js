@@ -152,6 +152,47 @@ const DRAMAS = [
     'Sebuah desa kecil menemukan sinetron mingguannya diam-diam memakai nama asli mereka selama tiga puluh tahun, dan baru sekarang sebuah alur cocok dengan pembunuhan yang tak pernah terpecahkan. Semua orang mulai menonton; penulisnya berhenti.'),
 ];
 
+// ── Sample artwork ───────────────────────────────────────────────────────
+// One free-license photograph per sample drama (picsum.photos / Unsplash
+// license, committed as WebP under public/img/), curated HERE next to the
+// titles and synopses it is matched against: seedCatalog writes
+// poster_url/backdrop_url onto each sample row from this table, and the
+// client renders records only. No real show, person or logo is depicted.
+//
+// The audit rule: a photo stays only if it honestly matches the drama's
+// subject or mood; otherwise it is reassigned from the committed spare pool
+// (the episode-still photos under public/img/still/ that are not any
+// drama's primary) or the row is left without a photo (the record then
+// renders its own generated titled art / the neutral placeholder — never a
+// stand-in that could belong to another show). Assignments audited 2026-10:
+// reassigned 6→294 (robed figure above clouds), 10→563 (open road),
+// 26→639 (ferris wheel), 27→419 (vintage trams: decommissioned transit
+// that still runs), 28→344 (hazy town over water), 30→635 (village table);
+// the rest kept. Each photo id is used at most once — one drama, one
+// artwork, never shared.
+//
+// Photo ids and their authors, for the record:
+//   30 Shyamanta Baruah, 82 Rula Sibai, 100 Tina Rataj, 104 Dyaa Eldin,
+//   133 Dietmar Becker, 141 Greg Shield, 163 Linh Nguyen, 177 Danka &
+//   Peter, 211 Martin Wessely, 218 Monika Majkowska, 223 Maria Carrasco,
+//   232 Hide Obara, 249 Anders Jildn, 288 Stockholm, 294 Robin Benad,
+//   344 Alex Gindin, 375 Wellington Sanipe, 376 Andrew Ruiz,
+//   380 Michael Quinn, 405 Daniel Robert, 406 Roland Batke-Mutschler,
+//   419 POR7O, 449 Maciej Serafinowicz, 488 Monstruo Estudio,
+//   502 Sven Schlager, 509 Jeff Sheldon, 520 Dorothee Hübner,
+//   524 Charles Forerunner, 536 David Di Veroli, 537 Juskteez Vu,
+//   538 Julia Revitt, 545 Ryan Lum, 549 Artur Pokusin, 551 Forrest
+//   Cavale, 552 Hugo Kerr, 563 Bec Brown, 564 Sebastian Boguszewicz,
+//   568 Dakota Roos, 575 Alberto Restifo, 585 Abigail & Keenan,
+//   594 Aurélien Bellanger, 612 Justin Leibow, 615 Josefa Holland-Merten,
+//   616 Sylwia Bartyzel, 619 Davey Heuser, 635 André Freitas, 639 Ilya.
+const SAMPLE_ART = {
+  1: 223, 2: 594, 3: 218, 4: 502, 5: 232, 6: 294, 7: 612, 8: 574, 9: 163,
+  10: 563, 11: 405, 12: 449, 13: 538, 14: 249, 15: 568, 16: 376, 17: 211,
+  18: 82, 19: 133, 20: 616, 21: 288, 22: 537, 23: 104, 24: 406, 25: 545,
+  26: 639, 27: 419, 28: 344, 29: 575, 30: 635,
+};
+
 // Episodes are generated deterministically per drama: 8-12 episodes, 38-52
 // display minutes each, and a sample video from the pool. The pool stride
 // over i must be coprime with the pool length (6), so a drama's episodes
@@ -180,4 +221,4 @@ function episodesFor(d) {
   return out;
 }
 
-module.exports = { DRAMAS, episodesFor, VIDEO_BASE, VIDEO_POOL };
+module.exports = { DRAMAS, SAMPLE_ART, episodesFor, VIDEO_BASE, VIDEO_POOL };

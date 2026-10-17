@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
-const { DRAMAS, episodesFor, VIDEO_BASE, VIDEO_POOL } = require('./data/catalog');
+const { DRAMAS, SAMPLE_ART, episodesFor, VIDEO_BASE, VIDEO_POOL } = require('./data/catalog');
 const { isProfane, isSpam, loose } = require('./moderation');
 const tmdb = require('./providers/tmdb');
 
@@ -387,16 +387,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS dramas_tmdb_id_idx ON dramas(tmdb_id) WHERE tm
 
 // Seed the sample catalog (idempotent; the same content in staging and
 // production — it is the app's Phase 1 mock data, not fake visitor data).
+// Each sample row carries its own artwork: seedCatalog is the only writer
+// of poster_url/backdrop_url for the samples (ids 1-30), from the curated
+// SAMPLE_ART table in data/catalog.js. A drama with no curated photo seeds
+// NULL and renders its generated titled art / the neutral placeholder.
 async function seedCatalog() {
   const client = await pool.connect();
   try {
     for (const d of DRAMAS) {
+      const photo = SAMPLE_ART[d.id] || null;
+      const posterUrl = photo ? `/img/poster/${photo}-600.webp` : null;
+      const backdropUrl = photo ? `/img/backdrop/${photo}.webp` : null;
       await client.query(
-        `INSERT INTO dramas (id, title, year, country, genres, rating, popularity, featured, cast_names, synopsis_en, synopsis_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-         ON CONFLICT (id) DO NOTHING`,
+        `INSERT INTO dramas (id, title, year, country, genres, rating, popularity, featured, cast_names, synopsis_en, synopsis_id, poster_url, backdrop_url)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         ON CONFLICT (id) DO UPDATE
+           SET poster_url = EXCLUDED.poster_url, backdrop_url = EXCLUDED.backdrop_url
+           WHERE dramas.id BETWEEN 1 AND 30 AND NOT dramas.is_demo`,
         [d.id, d.title, d.year, d.country, d.genres, d.rating, d.popularity,
-         d.featured, d.cast, d.synopsis_en, d.synopsis_id]
+         d.featured, d.cast, d.synopsis_en, d.synopsis_id, posterUrl, backdropUrl]
       );
       for (const ep of episodesFor(d)) {
         await client.query(
