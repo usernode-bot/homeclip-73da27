@@ -25,7 +25,8 @@ const STRINGS = {
 
     'home.search': 'Search dramas',
     'home.empty': 'No dramas available yet',
-    'home.emptyBody': 'Check back soon!',
+    'home.emptyBody': 'The catalog is still being filled. Meanwhile, follow the group\'s dramas and mark episodes watched in the drama tracker.',
+    'home.emptyAction': 'Open the drama tracker',
     'home.trending': 'Trending Now',
     'home.series': 'Popular Series',
     'home.recent': 'Recently Added',
@@ -269,7 +270,8 @@ const STRINGS = {
 
     'home.search': 'Cari drama',
     'home.empty': 'Belum ada drama',
-    'home.emptyBody': 'Nantikan segera!',
+    'home.emptyBody': 'Katalog masih diisi. Sementara itu, ikuti drama grup dan tandai episode yang sudah ditonton di pelacak drama.',
+    'home.emptyAction': 'Buka pelacak drama',
     'home.trending': 'Sedang Tren',
     'home.series': 'Serial Populer',
     'home.recent': 'Baru ditambahkan',

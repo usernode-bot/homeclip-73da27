@@ -22,4 +22,6 @@ module.exports.CATALOG_IMPORT = [
   { title: 'Put Your Head on My Shoulder', original: '致我们暖暖的小时光', year: 2019, country: 'cn' },
   { title: 'Welcome to Samdal-ri', original: '웰컴투 삼달리', year: 2023, country: 'kr' },
   { title: 'Our Beloved Summer', original: '그 해 우리는', year: 2021, country: 'kr' },
+  { title: 'Twinkling Watermelon', original: '반짝이는 워터멜론', year: 2023, country: 'kr' },
+  { title: 'Hidden Love', original: '偷偷藏不住', year: 2023, country: 'cn' },
 ];
