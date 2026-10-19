@@ -986,14 +986,26 @@ app.post('/api/admin/dramas/import', h(async (req, res) => {
 }));
 
 // Curator record list: every catalog drama with its flags, for the studio's
-// review list and artwork checks.
+// review list and artwork checks. Each stored same-origin artwork link also
+// carries whether it actually resolves (poster_ok / backdrop_ok), so the
+// studio can show the placeholder for a link known to be broken instead of
+// asking the browser to request it and log the failure its own fallback was
+// already papering over. Provider CDN links are left unprobed — checking
+// those is the scan's on-demand job, not every list load's.
 app.get('/api/admin/dramas', h(async (req, res) => {
   if (!requireCurator(req, res)) return;
   const demo = wantsDemo(req);
   const r = await pool.query(
     `SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${catalogDemoWhere(demo)} ORDER BY d.id`
   );
-  res.json({ items: r.rows });
+  const items = await Promise.all(r.rows.map(async (row) => ({
+    ...row,
+    poster_ok: row.poster_url && row.poster_url.startsWith('/')
+      ? (await probeArtwork(row.poster_url)) === 'ok' : undefined,
+    backdrop_ok: row.backdrop_url && row.backdrop_url.startsWith('/')
+      ? (await probeArtwork(row.backdrop_url)) === 'ok' : undefined,
+  })));
+  res.json({ items });
 }));
 
 // Replace artwork or flip curator flags on one record. Poster/backdrop
