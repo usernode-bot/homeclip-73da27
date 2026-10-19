@@ -2,7 +2,7 @@
 // cast, episode list, Play / Continue and Add to My List.
 
 import { api } from '../api.js';
-import { el, skeletonDetail, errorState, emptyState, icon, toast, timeFmt, esc } from '../ui.js';
+import { el, skeletonDetail, errorState, emptyState, icon, toast, timeFmt, esc, hRow, dramaCard } from '../ui.js';
 import { artImg, backdropArt, backdropFallback, lqipArt, stillArt } from '../art.js';
 import { t, genreLabel, countryLabel, langLabel, getLang } from '../i18n.js';
 import { navigate } from '../router.js';
@@ -46,7 +46,7 @@ export async function render({ view, params, query }) {
     return;
   }
 
-  const { drama: d, episodes, inMyList, progress } = data;
+  const { drama: d, episodes, inMyList, progress, similar } = data;
   const lang = getLang();
   // A verified record's synopsis comes from the provider (English); the
   // Indonesian field stays empty until translated, so fall back.
@@ -214,6 +214,19 @@ export async function render({ view, params, query }) {
     epList.appendChild(row);
   }
   root.appendChild(epSection);
+
+  // More like this: dramas sharing a genre or country with this one,
+  // ranked by the server. Only when the catalog actually has some.
+  const similarRow = (similar || []).filter(Boolean);
+  if (similarRow.length) {
+    root.appendChild(el('<section class="mt-6" data-similar></section>'));
+    root.querySelector('[data-similar]').appendChild(
+      hRow(t('detail.similar'), similarRow.map((s) => dramaCard(s, {
+        href: '/drama/' + s.id + demoQ,
+        playHref: '/watch/' + s.id + '/1' + demoQ,
+      })))
+    );
+  }
 
   // Provider attribution, required for TMDB-sourced metadata and artwork.
   // Shown only where TMDB data is actually on screen (a verified record);
