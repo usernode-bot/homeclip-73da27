@@ -29,17 +29,22 @@ The group also keeps a shared **drama tracker** at `/tracker` (see below).
 
 ## Content
 
-The catalog ships empty. All bundled movie and drama content (an
+The catalog fills itself once. All bundled movie and drama content (an
 earlier invented sample catalog, a TMDB-curated boot seed and the
 staging demo dramas) was removed in October 2026, together with the
 watch history pointing at it; the deletion ran once per database
 through a marker-guarded boot migration (`wipeCatalogOnce` in
-`server.js`). Nothing reseeds catalog content: dramas arrive only
-through the Posters studio at `/posters`, where a signed-in member
-imports them from TMDB with the title and year verified against the
-provider record. A record without verified artwork shows the generated
-titled art (`/poster/:id.svg`, `/banner/:id.svg`) or the neutral
-placeholder — never a random or unrelated image.
+`server.js`). Right after it, a second marker-guarded boot migration
+(`importCatalogOnce`, list in `data/catalog-import.js`) imports a
+curated batch of real dramas through the same TMDB-verified writer the
+Posters studio uses — it needs `TMDB_API_KEY` and retries on the next
+boot when the key is missing or the provider is unreachable. More
+dramas arrive any time through the Posters studio at `/posters`, where
+a signed-in member imports them from TMDB with the title and year
+verified against the provider record. A record without verified
+artwork shows the generated titled art (`/poster/:id.svg`,
+`/banner/:id.svg`) or the neutral placeholder — never a random or
+unrelated image.
 
 Episode video for imported dramas is the committed royalty-free clip
 pool (`public/sample/`, CC BY, Blender Foundation trims, served as both

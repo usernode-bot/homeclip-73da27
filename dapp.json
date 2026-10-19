@@ -35,12 +35,12 @@
   },
   "tests": [
     {
-      "name": "Home renders with the empty catalog state",
+      "name": "Home renders",
       "path": "/",
-      "expectText": "No dramas available yet",
+      "expectText": "Browse by genre",
       "impact": ["server.js", "public/js/views/home.js", "public/js/ui.js", "public/js/i18n.js", "styles/**"]
     },
-    { "name": "Discover shows its empty state", "path": "/discover", "expectText": "No dramas match these filters." },
+    { "name": "Discover renders", "path": "/discover", "expectText": "Discover" },
     { "name": "Search shows its empty state", "path": "/search?q=zzzz", "expectText": "No matches" },
     { "id": "demo-feed", "name": "Tracker populated demo", "path": "/tracker?demo=1", "expectText": "The Tide Table", "visual": true, "impact": ["public/tracker.html", "public/app.js", "public/screens.css", "styles/**"] },
     { "id": "home-rows", "name": "Tracker browse rows", "path": "/tracker?demo=1", "expectText": "Trending Now", "visual": true, "impact": ["public/tracker.html", "public/app.js", "public/screens.css", "styles/**", "server.js"] },
