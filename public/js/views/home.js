@@ -2,7 +2,7 @@
 // horizontal rows (Continue Watching, Trending Now, New Episodes, Top 10).
 
 import { api } from '../api.js';
-import { el, dramaCard, hRow, skeletonHome, errorState, icon, metaLine } from '../ui.js';
+import { el, dramaCard, hRow, skeletonHome, errorState, emptyState, icon, metaLine } from '../ui.js';
 import { artImg, bannerArt, backdropArt, backdropFallback, posterFallback, lqipArt } from '../art.js';
 import { t, genreLabel, GENRES } from '../i18n.js';
 import { navigate } from '../router.js';
@@ -191,30 +191,70 @@ export async function render({ view, query }) {
   // On the demo page every link keeps ?demo=1 so a demo drama's detail
   // and player routes (which hide is_demo rows without it) keep working.
   const hrefD = (d) => '/drama/' + d.id + demoParam;
+  const playD = (d, ep) => '/watch/' + d.id + '/' + (ep || 1) + demoParam;
   const continueRow = (data.continue || []).filter(Boolean);
   if (continueRow.length) {
     view.appendChild(hRow(t('home.continue'),
       continueRow.map((d) => dramaCard(d, {
         progress: { ep: d.ep, seconds: d.seconds, duration: d.duration },
         href: '/watch/' + d.id + '/' + d.ep + demoParam,
+        playHref: playD(d, d.ep),
       }))
     ));
   }
-  view.appendChild(hRow(t('home.trending'), data.trending.map((d) => dramaCard(d, { href: hrefD(d) }))));
+  // A demo page's cards keep ?demo=1 on both of their links.
+  const cardD = (d, extra) => dramaCard(d, Object.assign({ href: hrefD(d), playHref: playD(d) }, extra || {}));
+
+  // Watchlist: what the viewer saved, only when they saved something —
+  // guests and fresh viewers see no row at all.
+  const watchRow = (data.watchlist || []).filter(Boolean);
+  if (watchRow.length) {
+    view.appendChild(hRow(t('home.watchlist'), watchRow.map((d) => cardD(d))));
+  }
+  const trendingRow = (data.trending || []).filter(Boolean);
+  if (trendingRow.length) {
+    view.appendChild(hRow(t('home.trending'), trendingRow.map((d) => cardD(d))));
+  }
+  // Recommended for You: dramas sharing a genre with what the viewer has
+  // watched or saved; the server falls back to top-rated without that
+  // history, so the row fills whenever the catalog has dramas.
+  const recRow = (data.recommended || []).filter(Boolean);
+  if (recRow.length) {
+    view.appendChild(hRow(t('home.recommended'), recRow.map((d) => cardD(d))));
+  }
   // Popular Series: the catalog's series, most popular first — the shorts'
   // counterpart row. Hidden when the catalog has none, like the shorts row.
   const seriesRow = (data.series || []).filter(Boolean);
   if (seriesRow.length) {
-    view.appendChild(hRow(t('home.series'), seriesRow.map((d) => dramaCard(d, { href: hrefD(d) }))));
+    view.appendChild(hRow(t('home.series'), seriesRow.map((d) => cardD(d))));
   }
   // Short dramas: a row of their own, only when the catalog has any —
   // never an empty row.
   const shortRow = (data.shortDramas || []).filter(Boolean);
   if (shortRow.length) {
-    view.appendChild(hRow(t('home.short'), shortRow.map((d) => dramaCard(d, { href: hrefD(d) }))));
+    view.appendChild(hRow(t('home.short'), shortRow.map((d) => cardD(d))));
   }
   // Recently Added: the newest catalog entries first, so a drama a curator
   // just imported leads the row.
-  view.appendChild(hRow(t('home.recent'), (data.recent || []).map((d) => dramaCard(d, { href: hrefD(d) }))));
-  view.appendChild(hRow(t('home.top10'), data.top10.map((d, i) => dramaCard(d, { rank: i + 1, href: hrefD(d) }))));
+  const recentRow = (data.recent || []).filter(Boolean);
+  if (recentRow.length) {
+    view.appendChild(hRow(t('home.recent'), recentRow.map((d) => cardD(d))));
+  }
+  const topRow = (data.top10 || []).filter(Boolean);
+  if (topRow.length) {
+    view.appendChild(hRow(t('home.top10'), topRow.map((d, i) => cardD(d, { rank: i + 1 }))));
+  }
+  // One row per genre the catalog actually has; the server leaves genres
+  // with no dramas out, so nothing renders empty.
+  for (const gr of (data.genreRows || [])) {
+    if (!gr.items || !gr.items.length) continue;
+    view.appendChild(hRow(genreLabel(gr.genre), gr.items.map((d) => cardD(d))));
+  }
+
+  // Nothing in the catalog yet (and nothing to continue): the search and
+  // the genre chips above stay, the rows are gone, and one quiet empty
+  // state says where the content would be.
+  if (!data.featured.length && !continueRow.length && !trendingRow.length) {
+    view.appendChild(emptyState(t('home.empty'), t('home.emptyBody')));
+  }
 }

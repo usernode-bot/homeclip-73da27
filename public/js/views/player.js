@@ -123,17 +123,17 @@ export async function render({ view, params, query }) {
           '<button type="button" class="btn-secondary" data-paywall-back>' + t('common.back') + '</button>' +
         '</div>' +
       '</div>' +
-      // Episode unavailable: the episode is unlocked but the server sent no
-      // video URL — no licensed source is configured. Same stage pattern as
-      // the paywall; the primary action hands the viewer to the drama's
-      // authorized streaming platform when one is configured (d.watch_url).
-      '<div class="absolute inset-0 z-10 hidden flex-col items-center justify-center gap-2 bg-black/85 p-6 text-center" data-unavailable>' +
+      // Streaming unavailable: an unlocked episode whose record carries no
+      // authorized video URL. A clear state instead of a fake player. The
+      // primary action hands the viewer to the drama's authorized streaming
+      // platform when one is configured (d.watch_url).
+      '<div class="absolute inset-0 z-10 hidden flex-col items-center justify-center gap-2 bg-black/85 p-6 text-center" data-unavail>' +
         '<span class="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 text-white">' + icon('globe', 'h-6 w-6') + '</span>' +
-        '<p class="text-heading text-white">' + t('player.unavailableTitle') + '</p>' +
+        '<p class="text-heading text-white">' + t('player.unavailable') + '</p>' +
         '<p class="text-small text-white/70">' + t('player.unavailableBody') + '</p>' +
         '<div class="mt-2 flex flex-col items-center gap-2">' +
           '<a class="btn-primary hidden" data-unav-link target="_blank" rel="noopener">' + t('player.unavailableLink') + '</a>' +
-          '<button type="button" class="btn-secondary" data-unav-back>' + t('common.back') + '</button>' +
+          '<button type="button" class="btn-secondary" data-unavail-back>' + t('common.back') + '</button>' +
         '</div>' +
       '</div>' +
       // Bottom controls.
@@ -166,7 +166,7 @@ export async function render({ view, params, query }) {
   const endedTitle = stage.querySelector('[data-ended-title]');
   const endedActions = stage.querySelector('[data-ended-actions]');
   const paywall = stage.querySelector('[data-paywall]');
-  const unavBox = stage.querySelector('[data-unavailable]');
+  const unavail = stage.querySelector('[data-unavail]');
   const unavLink = stage.querySelector('[data-unav-link]');
   const controlsWrap = stage.querySelector('[data-controlswrap]');
   const epLabel = stage.querySelector('[data-eplabel]');
@@ -291,9 +291,6 @@ export async function render({ view, params, query }) {
     updateStageUi();
   }
 
-  // The stage has nothing to play: an unlocked episode the server sent
-  // without a video URL (no licensed source configured). Same pattern as
-  // the paywall; the link hands the viewer to the authorized platform.
   function showUnavailable() {
     unavailUi = true;
     hideError();
@@ -305,8 +302,8 @@ export async function render({ view, params, query }) {
     } else {
       unavLink.classList.add('hidden');
     }
-    unavBox.classList.remove('hidden');
-    unavBox.classList.add('flex');
+    unavail.classList.remove('hidden');
+    unavail.classList.add('flex');
     controlsWrap.classList.add('hidden');
     updateStageUi();
   }
@@ -314,8 +311,8 @@ export async function render({ view, params, query }) {
   function hideUnavailable() {
     if (!unavailUi) return;
     unavailUi = false;
-    unavBox.classList.add('hidden');
-    unavBox.classList.remove('flex');
+    unavail.classList.add('hidden');
+    unavail.classList.remove('flex');
     unavLink.classList.add('hidden');
     controlsWrap.classList.remove('hidden');
     updateStageUi();
@@ -379,9 +376,9 @@ export async function render({ view, params, query }) {
     // is the stage. Episode rows and badges still navigate here on purpose.
     if (src.locked) { hideUnavailable(); showPaywall(); return; }
     hidePaywall();
-    // An unlocked episode with no video URL at all: no licensed source is
-    // configured for this drama, so the honest unavailable state is the
-    // stage — never a sample clip standing in for a real show.
+    // An unlocked episode with no video URL: no authorized source exists,
+    // so the stage says so instead of pretending to play (never a sample
+    // clip standing in for a real show).
     if (!src.videoUrl) { showUnavailable(); return; }
     hideUnavailable();
 
@@ -725,13 +722,13 @@ export async function render({ view, params, query }) {
   stage.querySelector('[data-back]').addEventListener('click', () => {
     cancelCountdown();
     saveNow();
-    navigate('/drama/' + d.id);
+    navigate('/drama/' + d.id + demoQ);
   });
   stage.querySelector('[data-paywall-back]').addEventListener('click', () => {
-    navigate('/drama/' + d.id);
+    navigate('/drama/' + d.id + demoQ);
   });
-  stage.querySelector('[data-unav-back]').addEventListener('click', () => {
-    navigate('/drama/' + d.id);
+  stage.querySelector('[data-unavail-back]').addEventListener('click', () => {
+    navigate('/drama/' + d.id + demoQ);
   });
 
   // Space bar toggles playback (desktop convenience).

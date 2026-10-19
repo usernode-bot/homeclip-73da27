@@ -3,8 +3,6 @@ const path = require('path');
 const fs = require('fs');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
-const { DRAMAS, episodesFor, VIDEO_BASE, VIDEO_POOL } = require('./data/catalog');
-const { REAL_CATALOG } = require('./data/real-catalog');
 const { isProfane, isSpam, loose } = require('./moderation');
 const { probeArtwork } = require('./art-probe');
 const tmdb = require('./providers/tmdb');
@@ -12,6 +10,22 @@ const tmdb = require('./providers/tmdb');
 const app = express();
 const port = process.env.PORT || 3000;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+// Episode video source for imported dramas: the six committed, same-origin
+// clips in public/sample/ (trims of Blender Foundation CC BY open movies,
+// each committed as .mp4 (H.264+AAC) and .webm (VP9+Opus)). URLs are
+// extensionless; the player appends the extensions and offers both sources.
+// The pool carries no catalog content of its own: the bundled sample dramas
+// are gone (see wipeCatalogOnce) and only curator imports reference it.
+const VIDEO_BASE = '';
+const VIDEO_POOL = [
+  '/sample/bunny',     // Big Buck Bunny
+  '/sample/sintel',    // Sintel
+  '/sample/elephants', // Elephants Dream
+  '/sample/tears',     // Tears of Steel
+  '/sample/cosmos',    // Cosmos Laundromat
+  '/sample/spring',    // Spring
+];
 
 // The platform signs user-identity tokens with an RSA private key it never
 // shares. Containers get only the PUBLIC half, so this app can verify who a
@@ -396,272 +410,6 @@ ALTER TABLE episodes ALTER COLUMN video_url DROP NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS dramas_tmdb_id_idx ON dramas(tmdb_id) WHERE tmdb_id IS NOT NULL;
 `;
 
-// Seed the sample catalog (idempotent; the same content in staging and
-// production — it is the app's Phase 1 mock data, not fake visitor data).
-async function seedCatalog() {
-  const client = await pool.connect();
-  try {
-    for (const d of DRAMAS) {
-      await client.query(
-        `INSERT INTO dramas (id, title, year, country, genres, rating, popularity, featured, cast_names, synopsis_en, synopsis_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-         ON CONFLICT (id) DO NOTHING`,
-        [d.id, d.title, d.year, d.country, d.genres, d.rating, d.popularity,
-         d.featured, d.cast, d.synopsis_en, d.synopsis_id]
-      );
-      for (const ep of episodesFor(d)) {
-        await client.query(
-          `INSERT INTO episodes (drama_id, num, duration_min, video_url, access, fallback_url)
-           VALUES ($1,$2,$3,$4,$5,$6)
-           ON CONFLICT (drama_id, num) DO UPDATE
-             SET duration_min = EXCLUDED.duration_min, video_url = EXCLUDED.video_url,
-                 access = EXCLUDED.access, fallback_url = EXCLUDED.fallback_url`,
-          [d.id, ep.num, ep.durationMin, ep.videoUrl, ep.access, ep.fallbackUrl]
-        );
-      }
-    }
-    // The sample catalog's content type was added after the dramas
-    // themselves: stamp the sample rows once (idempotent — only rows still
-    // NULL, and only the samples' id range, never imports or demo rows).
-    // This is what fills Home's Popular Series row.
-    await client.query(`UPDATE dramas SET content_type = 'series' WHERE content_type IS NULL AND id < 9000`);
-  } finally {
-    client.release();
-  }
-}
-
-// Catalog demo records (staging, ?demo=1): three fake dramas that
-// demonstrate the new states without any TMDB key — two verified shorts
-// (poster/backdrop point at their own committed demo artwork, one URL per
-// record, never shared) and one series with no artwork at all, which is
-// what the neutral placeholder and "awaiting review" are for. popularity is
-// kept far below the real catalog's (never a signal the app fabricates) and
-// nothing is featured or trending-pinned.
-async function seedCatalogDemo() {
-  const demoDramas = [
-    {
-      id: 9001, title: 'Melati Jam 3', originalTitle: 'Melati Jam Tiga',
-      year: 2025, country: 'id', language: 'id', genres: ['romance'],
-      genresRaw: ['Drama'], rating: 7.8, popularity: 5, contentType: 'short',
-      verified: true, posterUrl: '/img/demo/poster-9001.svg',
-      backdropUrl: '/img/demo/backdrop-9001.svg',
-      director: 'Sutradara Demo', totalEpisodes: 20, durationMin: 3,
-      synopsisEn: 'Staging demo short drama: twenty three-minute episodes about a night-market flower seller.',
-      synopsisId: 'Demo staging drama pendek: dua puluh episode tiga menit tentang penjual bunga pasar malam.',
-    },
-    {
-      id: 9002, title: 'Taksi Terakhir', originalTitle: 'Taksi Terakhir',
-      year: 2025, country: 'id', language: 'id', genres: ['thriller'],
-      genresRaw: ['Drama', 'Mystery'], rating: 7.5, popularity: 4, contentType: 'short',
-      verified: true, posterUrl: '/img/demo/poster-9002.svg',
-      backdropUrl: '/img/demo/backdrop-9002.svg',
-      director: 'Sutradara Demo', totalEpisodes: 16, durationMin: 4,
-      synopsisEn: 'Staging demo short drama: a night cab driver keeps picking up the same passenger.',
-      synopsisId: 'Demo staging drama pendek: pengemudi taksi malam terus menjemput penumpang yang sama.',
-    },
-    {
-      id: 9003, title: 'Signal Test', originalTitle: 'Signal Test',
-      year: 2024, country: 'kr', language: 'ko', genres: ['drama'],
-      genresRaw: ['Drama'], rating: 8.1, popularity: 3, contentType: 'series',
-      verified: false, needsReview: true, posterUrl: null, backdropUrl: null,
-      director: null, totalEpisodes: 10, durationMin: 45,
-      synopsisEn: 'Staging demo series with no verified artwork: it shows the neutral placeholder.',
-      synopsisId: 'Demo staging serial tanpa poster terverifikasi: tampil dengan placeholder netral.',
-    },
-    // Verified series whose stored backdrop link is broken: the record is
-    // already flagged (needs_review, 'broken_link') so the studio's review
-    // list shows the reason without a scan, and its detail page shows the
-    // placeholder where the backdrop was. tmdb_id is fake and only marks
-    // the record as imported, so the studio offers Replace artwork.
-    {
-      id: 9004, title: 'Sinyal Putus', originalTitle: 'Sinyal Putus',
-      year: 2025, country: 'id', language: 'id', genres: ['thriller'],
-      genresRaw: ['Drama', 'Mystery'], rating: 7.4, popularity: 2, contentType: 'series',
-      verified: true, needsReview: true, reviewReason: 'broken_link',
-      posterUrl: '/img/demo/poster-9004.svg', backdropUrl: '/img/demo/missing-9004.svg',
-      tmdbId: 900400, director: 'Sutradara Demo', totalEpisodes: 12, durationMin: 3,
-      synopsisEn: 'Staging demo series whose stored backdrop link no longer loads: the artwork scan flags it.',
-      synopsisId: 'Demo staging serial yang tautan latarnya rusak: pemindaian poster menandainya.',
-    },
-    // Verified series with no artwork at all and no flag yet: the scan
-    // flags it missing_poster, and before that scan it sits in the
-    // studio's "No artwork yet" list and shows the neutral placeholder.
-    {
-      id: 9005, title: 'Poster Hilang', originalTitle: 'Poster Hilang',
-      year: 2024, country: 'id', language: 'id', genres: ['romance'],
-      genresRaw: ['Drama'], rating: 7.2, popularity: 1, contentType: 'series',
-      verified: true, needsReview: false, posterUrl: null, backdropUrl: null,
-      tmdbId: 900500,
-      director: 'Sutradara Demo', totalEpisodes: 8, durationMin: 3,
-      synopsisEn: 'Staging demo series that was verified without artwork: the scan marks its missing poster.',
-      synopsisId: 'Demo staging serial yang terverifikasi tanpa gambar: pemindaian menandai posternya yang hilang.',
-    },
-  ];
-  for (const d of demoDramas) {
-    await pool.query(
-      `INSERT INTO dramas (id, title, original_title, poster_url, backdrop_url, year, country,
-         language, genres, genres_raw, rating, popularity, content_type, verified, needs_review,
-         review_reason, tmdb_id, director, total_episodes, episode_duration_min,
-         synopsis_en, synopsis_id, is_demo)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,true)
-       ON CONFLICT (id) DO NOTHING`,
-      [d.id, d.title, d.originalTitle, d.posterUrl, d.backdropUrl, d.year, d.country,
-       d.language, d.genres, d.genresRaw, d.rating, d.popularity, d.contentType,
-       d.verified, !!d.needsReview, d.reviewReason || null, d.tmdbId || null,
-       d.director, d.totalEpisodes, d.durationMin,
-       d.synopsisEn, d.synopsisId]
-    );
-    for (let n = 1; n <= d.totalEpisodes; n++) {
-      await pool.query(
-        `INSERT INTO episodes (drama_id, num, duration_min, video_url)
-         VALUES ($1,$2,$3,$4)
-         ON CONFLICT (drama_id, num) DO UPDATE SET video_url = EXCLUDED.video_url`,
-        // The committed six-clip pool, never a URL that does not exist
-        // (a database seeded by an older boot keeps its /sample/clip rows,
-        // which is why the DO UPDATE refreshes them).
-        [d.id, n, d.durationMin, VIDEO_BASE + VIDEO_POOL[(d.id * 5 + n) % VIDEO_POOL.length]]
-      );
-    }
-    // Stamp the flag even when the row already exists (a database seeded by
-    // an older boot keeps its copy), so plain routes always hide these rows.
-    await pool.query(`UPDATE dramas SET is_demo = true WHERE id = $1`, [d.id]);
-  }
-}
-
-// ── Real catalog: boot-time import of curated, TMDB-verified dramas ──────
-// data/real-catalog.js lists real series with their editorial weight. When
-// TMDB_API_KEY is set, each entry is resolved against the provider and
-// imported through importVerifiedDrama() — the same fail-closed verify the
-// curator studio uses (a fresh provider fetch; normalized title against
-// the provider's title OR original title; exact year). A match that fails
-// writes nothing and is reported: never a guessed poster. Without a key,
-// or when the provider is unreachable, nothing is imported and the app
-// keeps its sample catalog; removing the key rolls the viewer experience
-// straight back. Idempotent: an entry whose tmdb_id is already in the
-// catalog is skipped, so re-boots cost nothing and partial runs resume.
-async function seedRealCatalogEntry(entry) {
-  let tmdbId = entry.tmdbId || null;
-  if (!tmdbId) {
-    // Resolve by search: the first candidate whose first-air year is
-    // within ±1 and whose origin country matches the entry. The exact
-    // title/year verify still happens inside importVerifiedDrama against
-    // a fresh fetch, so a search mix-up (say, an anime remake airing a
-    // year off) fails the verify instead of saving a wrong record.
-    const cands = await tmdb.searchTv(entry.title);
-    for (const c of cands) {
-      if (Math.abs((c.year || 0) - entry.year) > 1) continue;
-      if (entry.country && c.originCountry !== entry.country) continue;
-      tmdbId = c.tmdbId;
-      break;
-    }
-  }
-  if (!tmdbId) {
-    console.error('[real-catalog] no provider match:', entry.title, '— skipped');
-    return false;
-  }
-  const dup = await pool.query('SELECT id FROM dramas WHERE tmdb_id = $1', [tmdbId]);
-  if (dup.rowCount) return true; // imported on an earlier boot
-  const out = await importVerifiedDrama({
-    tmdbId,
-    confirmTitle: entry.title,
-    confirmYear: entry.year,
-    contentType: 'series',
-    defaultArtwork: true,
-  });
-  const id = out.id;
-  // Editorial weight, applied after the verified import so the drama sits
-  // where the curation put it (a studio import never sets these).
-  const sets = ['popularity = $1'];
-  const params = [entry.popularity || 0];
-  if (entry.featured) { params.push(entry.featured); sets.push(`featured = $${params.length}`); }
-  if (entry.isTrending) { params.push(true); sets.push(`is_trending = $${params.length}`); }
-  params.push(id);
-  await pool.query(`UPDATE dramas SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
-  // The paywall stays demonstrable once the sample catalog leaves the
-  // plain viewer reads: the entry's final N episodes are VIP.
-  const vip = entry.vipEpisodes || 0;
-  if (vip > 0) {
-    await pool.query(
-      `UPDATE episodes SET access = 'vip'
-       WHERE drama_id = $1 AND num > (SELECT MAX(num) FROM episodes WHERE drama_id = $1) - $2`,
-      [id, vip]
-    );
-  }
-  // The show's page on its authorized streamer, applied after the verified
-  // import like the editorial weight. The player links here while the drama
-  // has no licensed video source.
-  if (entry.watchUrl) {
-    await pool.query('UPDATE dramas SET watch_url = $1 WHERE id = $2', [String(entry.watchUrl), id]);
-  }
-  console.log('[real-catalog] imported #' + id, entry.title);
-  return true;
-}
-
-async function seedRealDramas() {
-  if (!tmdb.configured() || !REAL_CATALOG.length) return;
-  const started = Date.now();
-  const BUDGET_MS = 20_000; // per boot; the rest resumes on the next one
-  const skipped = [];
-  let imported = 0;
-  let next = 0;
-  const runOne = async () => {
-    while (next < REAL_CATALOG.length) {
-      const entry = REAL_CATALOG[next++];
-      if (Date.now() - started > BUDGET_MS) { skipped.push(entry.title); continue; }
-      try {
-        if (await seedRealCatalogEntry(entry)) imported++;
-        else skipped.push(entry.title);
-      } catch (e) {
-        skipped.push(entry.title);
-        console.error('[real-catalog]', entry.title, '→', e.code || e.message);
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: 3 }, runOne));
-  console.log('[real-catalog] imported ' + imported + ', skipped ' + skipped.length +
-    (skipped.length ? ': ' + skipped.join(', ') : ''));
-}
-
-// ── Demo fixture (first version's populated demo, behind ?demo=1) ─────────
-// Writes the VIEWING account a few My List entries and half-watched episodes
-// ONCE, marked is_demo, so Home's "Continue Watching" and the My List /
-// History pages show a populated screen. Rows marked is_demo are excluded
-// from every response that does NOT carry ?demo=1, so the plain route stays
-// the production shape (an empty list until the user acts).
-const DEMO_MY_LIST_IDS = [1, 4, 12];
-const DEMO_PROGRESS = [
-  { dramaId: 2, ep: 3, pct: 0.42 },
-  { dramaId: 7, ep: 1, pct: 0.15 },
-  { dramaId: 13, ep: 5, pct: 0.7 },
-  { dramaId: 23, ep: 2, pct: 0.55 },
-];
-async function seedViewerDemo(userId) {
-  for (const id of DEMO_MY_LIST_IDS) {
-    await pool.query(
-      `INSERT INTO my_list (user_id, drama_id, is_demo) VALUES ($1,$2,true)
-       ON CONFLICT (user_id, drama_id) DO NOTHING`,
-      [userId, id]
-    );
-  }
-  for (const p of DEMO_PROGRESS) {
-    const eps = await pool.query(
-      'SELECT duration_min FROM episodes WHERE drama_id=$1 AND num=$2',
-      [p.dramaId, p.ep]
-    );
-    if (eps.rowCount === 0) continue;
-    // The stored duration is the REAL sample-video length is unknown here;
-    // store display minutes as seconds and let the player overwrite it with
-    // the true duration the first time it plays.
-    const dur = eps.rows[0].duration_min * 60;
-    await pool.query(
-      `INSERT INTO watch_progress (user_id, drama_id, ep, seconds, duration, is_demo)
-       VALUES ($1,$2,$3,$4,$5,true)
-       ON CONFLICT (user_id, drama_id) DO NOTHING`,
-      [userId, p.dramaId, p.ep, Math.round(dur * p.pct), dur]
-    );
-  }
-}
-
 // ?demo=1 requests (staging only) get the viewer's demo rows too; plain
 // requests never see them.
 function wantsDemo(req) {
@@ -675,37 +423,29 @@ function catalogDemoWhere(demo) {
   return demo ? '' : ' AND NOT d.is_demo';
 }
 
-// ── Sample-catalog retirement ─────────────────────────────────────────────
-// The 30 invented sample dramas (ids < 9000, artwork from the committed
-// stock photos) are the no-key fallback. Once a real, TMDB-verified
-// catalog exists (REAL_CATALOG_MIN verified records), plain viewer reads
-// stop serving them: their stock photography is exactly what a real
-// poster must not be mistaken for. The rows stay in the database — the
-// viewer demo fixture references them, and removing the TMDB key rolls
-// the viewer experience straight back. ?demo=1 always sees everything.
-const REAL_CATALOG_MIN = 10;
-
-let realReady = null;
-let realReadyAt = 0;
-async function realCatalogReady() {
-  if (realReady !== null && Date.now() - realReadyAt < 60_000) return realReady;
-  try {
-    const r = await pool.query(
-      'SELECT count(*)::int AS n FROM dramas WHERE tmdb_id IS NOT NULL AND NOT is_demo');
-    realReady = r.rows[0].n >= REAL_CATALOG_MIN;
-  } catch (e) {
-    realReady = false;
-  }
-  realReadyAt = Date.now();
-  return realReady;
-}
-
-// Extra WHERE fragment that hides the sample rows on plain reads once the
-// real catalog is ready. Never applied under ?demo=1.
-async function sampleFilter(demo) {
-  if (demo) return '';
-  return (await realCatalogReady())
-    ? ' AND NOT (d.id < 9000 AND d.tmdb_id IS NULL)' : '';
+// ── One-time catalog wipe ─────────────────────────────────────────────────
+// Every bundled movie and drama (the invented samples, the TMDB-curated
+// boot seed and the staging demo dramas) was removed from the app in
+// October 2026, together with the watch history and Continue Watching rows
+// that pointed at it. This boot migration runs the DELETE exactly ONCE per
+// database, guarded by a marker row, so a later restart never touches
+// dramas a curator imported after the wipe. episodes, my_list and
+// watch_progress reference dramas with ON DELETE CASCADE, so one DELETE
+// clears them all; profiles and settings are untouched.
+const CATALOG_WIPE_KEY = 'catalog-wipe-2026-10';
+async function wipeCatalogOnce() {
+  await pool.query(`CREATE TABLE IF NOT EXISTS app_migrations (
+    key TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+  const done = await pool.query('SELECT 1 FROM app_migrations WHERE key = $1', [CATALOG_WIPE_KEY]);
+  if (done.rowCount) return;
+  const wiped = await pool.query('DELETE FROM dramas');
+  await pool.query(
+    'INSERT INTO app_migrations (key) VALUES ($1) ON CONFLICT DO NOTHING',
+    [CATALOG_WIPE_KEY]
+  );
+  console.log('[catalog-wipe] removed ' + wiped.rowCount + ' dramas (one-time content wipe)');
 }
 
 // The viewing account's demo PROFILES: two fake profiles written once on
@@ -725,6 +465,11 @@ async function seedViewerDemoProfiles(userId) {
 }
 
 const DRAMA_FIELDS = 'd.id, d.title, d.original_title, d.alternative_titles, d.poster_url, d.backdrop_url, d.watch_url, d.year, d.country, d.language, d.genres, d.genres_raw, d.rating, d.popularity, d.featured, d.cast_names, d.director, d.total_episodes, d.episode_duration_min, d.content_type, d.tmdb_id, d.source_url, d.verified, d.needs_review, d.review_reason, d.is_trending, d.is_demo, d.synopsis_en, d.synopsis_id';
+
+// The catalog's genre vocabulary: what a filter may ask for and what a
+// manual record may carry. Providers/tmdb.js maps provider genre names onto
+// this same list, and the frontend's chips read it from i18n.
+const CATALOG_GENRES = ['romance', 'thriller', 'fantasy', 'comedy', 'historical', 'action', 'drama', 'youth'];
 
 // ── API ───────────────────────────────────────────────────────────────────
 
@@ -836,45 +581,89 @@ app.delete('/api/profiles/:id', async (req, res) => {
 // Everything the Home screen needs, in one round trip.
 app.get('/api/home', async (req, res) => {
   const demo = wantsDemo(req);
-  if (demo && req.user) {
-    const has = await pool.query(
-      'SELECT 1 FROM watch_progress WHERE user_id=$1 UNION ALL SELECT 1 FROM my_list WHERE user_id=$1 LIMIT 1',
+  const demoFilter = catalogDemoWhere(demo);
+  if (demo && req.user) await seedDemoCatalogViewer(req.user);
+  // Recommended for You: dramas sharing a genre with what the viewer has
+  // watched or saved, best rated first, excluding what those rows already
+  // show. Without that history (or for a guest) it falls back to the
+  // catalog's top-rated dramas — a honest default, not a fake signal.
+  let recommendedSql;
+  let recommendedParams;
+  if (req.user) {
+    const g = await pool.query(
+      `SELECT DISTINCT unnest(d.genres) AS g
+       FROM (
+         SELECT drama_id FROM watch_progress WHERE user_id = $1 ${demo ? '' : 'AND is_demo = false'}
+         UNION SELECT drama_id FROM my_list WHERE user_id = $1 ${demo ? '' : 'AND is_demo = false'}
+       ) a JOIN dramas d ON d.id = a.drama_id`,
       [req.user.id]
     );
-    if (has.rowCount === 0) await seedViewerDemo(req.user.id);
+    const preferred = g.rows.map((r) => r.g);
+    if (preferred.length) {
+      recommendedSql = `SELECT ${DRAMA_FIELDS} FROM dramas d
+         WHERE true${demoFilter} AND d.genres && $1::text[] AND NOT (
+           d.id IN (SELECT drama_id FROM watch_progress WHERE user_id = $2 ${demo ? '' : 'AND is_demo = false'})
+           OR d.id IN (SELECT drama_id FROM my_list WHERE user_id = $2 ${demo ? '' : 'AND is_demo = false'}))
+         ORDER BY d.rating DESC, d.popularity DESC LIMIT 12`;
+      recommendedParams = [preferred, req.user.id];
+    }
   }
-  const demoFilter = catalogDemoWhere(demo);
-  const sample = await sampleFilter(demo);
-  const [featured, trending, series, recent, top10, shorts, cont] = await Promise.all([
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE featured IS NOT NULL${demoFilter}${sample} ORDER BY featured LIMIT 5`),
+  if (!recommendedSql) {
+    recommendedSql = `SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter}
+       ORDER BY d.rating DESC, d.popularity DESC LIMIT 12`;
+    recommendedParams = [];
+  }
+  // One row per genre the catalog actually has: a genre with no dramas
+  // contributes no row, so nothing renders empty.
+  const GENRE_ROW_KEYS = CATALOG_GENRES;
+  const [featured, trending, series, recent, top10, shorts, cont, list, ...genreQs] = await Promise.all([
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE featured IS NOT NULL${demoFilter} ORDER BY featured LIMIT 5`),
     // Trending: the editorial is_trending pin over the popularity signal.
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter}${sample} ORDER BY d.is_trending DESC, d.popularity DESC LIMIT 12`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter} ORDER BY d.is_trending DESC, d.popularity DESC LIMIT 12`),
     // Popular Series: the catalog's series, most popular first — the
     // shorts' counterpart row.
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.content_type = 'series'${demoFilter}${sample} ORDER BY d.popularity DESC LIMIT 12`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.content_type = 'series'${demoFilter} ORDER BY d.popularity DESC LIMIT 12`),
     // Recently Added: the newest catalog entries first, so a drama a
     // curator just imported leads the row.
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter}${sample} ORDER BY d.id DESC LIMIT 12`),
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter}${sample} ORDER BY d.rating DESC, d.popularity DESC LIMIT 10`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter} ORDER BY d.id DESC LIMIT 12`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${demoFilter} ORDER BY d.rating DESC, d.popularity DESC LIMIT 10`),
     // Short dramas: a row of their own when the catalog has any.
-    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.content_type = 'short'${demoFilter}${sample} ORDER BY d.popularity DESC LIMIT 12`),
+    pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.content_type = 'short'${demoFilter} ORDER BY d.popularity DESC LIMIT 12`),
     req.user
       ? pool.query(
           `SELECT ${DRAMA_FIELDS}, w.ep, w.seconds, w.duration, w.updated_at
            FROM watch_progress w JOIN dramas d ON d.id = w.drama_id
-           WHERE w.user_id = $1 ${demo ? '' : 'AND w.is_demo = false'}${demoFilter}${sample}
+           WHERE w.user_id = $1 ${demo ? '' : 'AND w.is_demo = false'}${demoFilter}
            ORDER BY w.updated_at DESC LIMIT 12`,
           [req.user.id])
       : { rows: [] },
+    req.user
+      ? pool.query(
+          `SELECT ${DRAMA_FIELDS}, m.added_at
+           FROM my_list m JOIN dramas d ON d.id = m.drama_id
+           WHERE m.user_id = $1 ${demo ? '' : 'AND m.is_demo = false'}${demoFilter}
+           ORDER BY m.added_at DESC LIMIT 12`,
+          [req.user.id])
+      : { rows: [] },
+    ...GENRE_ROW_KEYS.map((g) =>
+      pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE $1 = ANY(d.genres)${demoFilter} ORDER BY d.popularity DESC, d.rating DESC LIMIT 12`, [g])),
   ]);
+  const genreRows = GENRE_ROW_KEYS
+    .map((genre, i) => ({ genre, items: genreQs[i].rows }))
+    .filter((r) => r.items.length);
   res.json({
     featured: featured.rows,
     trending: trending.rows,
+    recommended: recommendedParams.length
+      ? (await pool.query(recommendedSql, recommendedParams)).rows
+      : (await pool.query(recommendedSql)).rows,
     series: series.rows,
     recent: recent.rows,
     top10: top10.rows,
     shortDramas: shorts.rows,
     continue: cont.rows,
+    watchlist: list.rows,
+    genreRows,
   });
 });
 
@@ -887,9 +676,7 @@ app.get('/api/dramas', async (req, res) => {
   const where = [];
   const params = [];
   if (!demo) where.push('NOT d.is_demo');
-  const sampleWhere = (await sampleFilter(demo)).replace(/^ AND /, '');
-  if (sampleWhere) where.push(sampleWhere);
-  if (genre && ['romance', 'thriller', 'fantasy', 'comedy', 'historical', 'action', 'drama'].includes(genre)) {
+  if (genre && CATALOG_GENRES.includes(genre)) {
     params.push(genre); where.push(`$${params.length} = ANY(d.genres)`);
   }
   if (country && /^[a-z]{2}$/.test(country)) {
@@ -923,17 +710,11 @@ app.get('/api/dramas', async (req, res) => {
 app.get('/api/dramas/:id', async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'not_found' });
+  if (wantsDemo(req) && req.user) await seedDemoCatalogViewer(req.user);
   const d = await pool.query(`SELECT ${DRAMA_FIELDS} FROM dramas d WHERE d.id = $1`, [id]);
   if (d.rowCount === 0) return res.status(404).json({ error: 'not_found' });
-  // Staging demo rows stay behind ?demo=1, like the list routes. So do the
-  // sample dramas once the real catalog is ready (same filter as the list
-  // routes) — under ?demo=1 they stay reachable, and the viewer demo
-  // fixture keeps working.
+  // Staging demo rows stay behind ?demo=1, like the list routes.
   if (d.rows[0].is_demo && !wantsDemo(req)) return res.status(404).json({ error: 'not_found' });
-  if (!wantsDemo(req) && d.rows[0].id < 9000 && !d.rows[0].tmdb_id &&
-      (await sampleFilter(false))) {
-    return res.status(404).json({ error: 'not_found' });
-  }
   const eps = await pool.query(
     'SELECT num, duration_min, video_url, access, fallback_url FROM episodes WHERE drama_id = $1 ORDER BY num', [id]
   );
@@ -964,7 +745,17 @@ app.get('/api/dramas/:id', async (req, res) => {
       fallback_url: locked ? null : e.fallback_url,
     };
   });
-  res.json({ drama: d.rows[0], episodes, inMyList, progress });
+  // More like this: dramas sharing a genre with this one (more shared
+  // genres rank higher), then the same country, then popularity.
+  const me = d.rows[0];
+  const similar = await pool.query(
+    `SELECT ${DRAMA_FIELDS} FROM dramas d
+     WHERE d.id <> $1${catalogDemoWhere(wantsDemo(req))} AND (d.genres && $2::text[] OR d.country = $3)
+     ORDER BY (SELECT count(*) FROM unnest(d.genres) g WHERE g = ANY($2::text[])) DESC,
+       (d.country = $3)::int DESC, d.popularity DESC, d.rating DESC LIMIT 12`,
+    [id, me.genres || [], me.country || '']
+  );
+  res.json({ drama: me, episodes, inMyList, progress, similar: similar.rows });
 });
 
 // Wrap an async handler so a rejected promise answers 500 JSON instead of
@@ -1026,15 +817,14 @@ app.get('/api/admin/tmdb/tv/:tmdbId', h(async (req, res) => {
   res.json({ record: await tmdb.getTv(tmdbId) });
 }));
 
-// Verify and import one provider record. Shared by the curator route
-// (POST /api/admin/dramas/import) and the boot-time real-catalog seed, so
-// the verification rules cannot drift apart. b carries { tmdbId,
+// Verify and import one provider record (POST /api/admin/dramas/import).
+// b carries { tmdbId,
 // confirmTitle, confirmYear, posterPath?, backdropPath?, contentType?,
 // dramaId?, noSampleVideo? }; confirmTitle/confirmYear are required unless this is an
 // artwork-only replace (dramaId set, no confirm fields). b.defaultArtwork
-// (the boot seed) picks the record's first poster and backdrop when the
-// caller names no paths. Throws a coded Error on a failed check: the route
-// maps it to its HTTP answer, the seed logs and skips the entry.
+// picks the record's first poster and backdrop when the caller names no
+// paths. Throws a coded Error on a failed check: the route maps it to its
+// HTTP answer.
 function importError(code, status) {
   const err = new Error(code);
   err.code = code;
@@ -1122,9 +912,9 @@ async function importVerifiedDrama(b) {
     return { ok: true, id };
   }
 
-  // New record: allocate the next id with a small retry. The boot seed and
-  // simultaneous curators can compute the same MAX(id)+1; the loser retries
-  // on the unique violation with the fresh max.
+  // New record: allocate the next id with a small retry. Simultaneous
+  // curators can compute the same MAX(id)+1; the loser retries on the
+  // unique violation with the fresh max.
   let id;
   for (let attempt = 0; ; attempt++) {
     const nxt = await pool.query('SELECT COALESCE(MAX(id), 0) + 1 AS n FROM dramas');
@@ -1184,7 +974,7 @@ app.post('/api/admin/dramas/import', h(async (req, res) => {
     const country = /^[a-z]{2}$/.test(String(b.country || '')) ? String(b.country) : '';
     const synopsis = String(b.synopsis || '').slice(0, 2000);
     const genres = Array.isArray(b.genres)
-      ? b.genres.filter((g) => ['romance', 'thriller', 'fantasy', 'comedy', 'historical', 'action', 'drama'].includes(g))
+      ? b.genres.filter((g) => CATALOG_GENRES.includes(g))
       : [];
     const nxt = await pool.query('SELECT COALESCE(MAX(id), 0) + 1 AS n FROM dramas');
     const id = nxt.rows[0].n;
@@ -1209,14 +999,26 @@ app.post('/api/admin/dramas/import', h(async (req, res) => {
 }));
 
 // Curator record list: every catalog drama with its flags, for the studio's
-// review list and artwork checks.
+// review list and artwork checks. Each stored same-origin artwork link also
+// carries whether it actually resolves (poster_ok / backdrop_ok), so the
+// studio can show the placeholder for a link known to be broken instead of
+// asking the browser to request it and log the failure its own fallback was
+// already papering over. Provider CDN links are left unprobed — checking
+// those is the scan's on-demand job, not every list load's.
 app.get('/api/admin/dramas', h(async (req, res) => {
   if (!requireCurator(req, res)) return;
   const demo = wantsDemo(req);
   const r = await pool.query(
     `SELECT ${DRAMA_FIELDS} FROM dramas d WHERE true${catalogDemoWhere(demo)} ORDER BY d.id`
   );
-  res.json({ items: r.rows });
+  const items = await Promise.all(r.rows.map(async (row) => ({
+    ...row,
+    poster_ok: row.poster_url && row.poster_url.startsWith('/')
+      ? (await probeArtwork(row.poster_url)) === 'ok' : undefined,
+    backdrop_ok: row.backdrop_url && row.backdrop_url.startsWith('/')
+      ? (await probeArtwork(row.backdrop_url)) === 'ok' : undefined,
+  })));
+  res.json({ items });
 }));
 
 // Replace artwork or flip curator flags on one record. Poster/backdrop
@@ -1358,15 +1160,10 @@ app.post('/api/admin/dramas/check-art', h(async (req, res) => {
 
 app.get('/api/my-list', async (req, res) => {
   const demo = wantsDemo(req);
-  if (demo && req.user) {
-    const has = await pool.query('SELECT 1 FROM my_list WHERE user_id=$1 UNION ALL SELECT 1 FROM watch_progress WHERE user_id=$1 LIMIT 1', [req.user.id]);
-    if (has.rowCount === 0) await seedViewerDemo(req.user.id);
-  }
-  const sampleMyList = await sampleFilter(demo);
   const r = await pool.query(
     `SELECT ${DRAMA_FIELDS}, m.added_at
      FROM my_list m JOIN dramas d ON d.id = m.drama_id
-     WHERE m.user_id = $1 ${demo ? '' : 'AND m.is_demo = false'}${demo ? '' : ' AND NOT d.is_demo'}${sampleMyList}
+     WHERE m.user_id = $1 ${demo ? '' : 'AND m.is_demo = false'}${demo ? '' : ' AND NOT d.is_demo'}
      ORDER BY m.added_at DESC`,
     [req.user ? req.user.id : 0]
   );
@@ -1392,10 +1189,6 @@ app.delete('/api/my-list/:id', async (req, res) => {
 
 app.get('/api/history', async (req, res) => {
   const demo = wantsDemo(req);
-  if (demo && req.user) {
-    const has = await pool.query('SELECT 1 FROM my_list WHERE user_id=$1 UNION ALL SELECT 1 FROM watch_progress WHERE user_id=$1 LIMIT 1', [req.user.id]);
-    if (has.rowCount === 0) await seedViewerDemo(req.user.id);
-  }
   const r = await pool.query(
     `SELECT ${DRAMA_FIELDS}, w.ep, w.seconds, w.duration, w.updated_at
      FROM watch_progress w JOIN dramas d ON d.id = w.drama_id
@@ -1433,11 +1226,10 @@ app.post('/api/progress', async (req, res) => {
 app.get('/api/facets', async (req, res) => {
   const demo = wantsDemo(req);
   const demoFilter = catalogDemoWhere(demo);
-  const sample = await sampleFilter(demo);
   const r = await pool.query(
-    `SELECT DISTINCT country FROM dramas d WHERE true${demoFilter}${sample} ORDER BY country`
+    `SELECT DISTINCT country FROM dramas d WHERE true${demoFilter} ORDER BY country`
   );
-  const y = await pool.query(`SELECT DISTINCT year FROM dramas d WHERE true${demoFilter}${sample} ORDER BY year DESC`);
+  const y = await pool.query(`SELECT DISTINCT year FROM dramas d WHERE true${demoFilter} ORDER BY year DESC`);
   res.json({ countries: r.rows.map(x => x.country), years: y.rows.map(x => x.year) });
 });
 
@@ -1445,7 +1237,7 @@ app.get('/api/facets', async (req, res) => {
 // drama itself (genre-hued gradient, a quiet pattern, the title). No
 // copyrighted artwork anywhere. Served OUTSIDE /api/ on purpose: <img> tags
 // cannot attach the auth header, and generated poster art is not sensitive.
-const GENRE_HUES = { romance: 335, thriller: 255, fantasy: 200, comedy: 28, historical: 165, action: 280 };
+const GENRE_HUES = { romance: 335, thriller: 255, fantasy: 200, comedy: 28, historical: 165, action: 280, youth: 150 };
 
 function escapeXml(s) {
   return s.replace(/[<>&'"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[c]));
@@ -2844,6 +2636,160 @@ async function seedStagingVip() {
   );
 }
 
+// ── Staging demo catalog ──────────────────────────────────────────────────
+// The streaming catalog ships EMPTY and nothing reseeds it (see the October
+// 2026 wipe): new dramas arrive only through the Posters studio. But a
+// staging preview of an empty catalog would show nothing to review, so —
+// like the tracker's demo dramas — staging seeds ten obviously fictional
+// Chinese dramas, fixed ids 820001-820010, is_demo = true. Every plain route
+// leaves is_demo rows out, so production reads stay production-shaped and
+// the existing empty-state tests keep passing. poster_url/backdrop_url are
+// NULL: the generated art renders, and no image URL is ever fabricated.
+const DEMO_CATALOG = [
+  { id: 820001, title: 'Lanterns Over Goose Hill', original: '鹅山灯火', year: 2025,
+    genres: ['historical', 'romance'], genresRaw: ['古装', '爱情'], rating: 8.7, pop: 98,
+    featured: 1, trending: true, type: 'series', eps: 16, dur: 45,
+    cast: ['Lin Wanqing', 'Shen Muyang', 'Gao Zhilan', 'Xu Beiming'],
+    director: 'Fang Yuran',
+    en: 'In 1930s Jiangnan, a lantern-maker\'s daughter trades her family\'s craft for a printing press — and collides with the reformist schoolteacher who prints on it.',
+    id_: 'Jiangnan tahun 1930-an: putri pembuat lentera menukar kerajinan keluarganya dengan mesin cetak, dan bertemu guru sekolah reformis yang mencetak di sana.' },
+  { id: 820002, title: 'Cloud Sword Chronicles', original: '云剑纪', year: 2024,
+    genres: ['fantasy', 'action'], genresRaw: ['玄幻', '动作'], rating: 8.2, pop: 95,
+    featured: null, trending: true, type: 'series', eps: 24, dur: 45,
+    cast: ['Qi Luochen', 'Bai Suxin', 'Tan Xiaohou', 'Mo Yunfei'],
+    director: 'Liang Chenghai',
+    en: 'A disgraced sword sect outcast climbs the Nine Cloud Peaks to reclaim a stolen blade, discovering the war between the sects was staged by the one master he trusted.',
+    id_: 'Seorang buangan sekte pedang mendaki Sembilan Puncak Awan untuk merebut kembali pedang curian, dan menemukan perang antar-sekte direkayasa oleh guru yang ia percayai.' },
+  { id: 820003, title: 'The Noodle Shop Next Door', original: '巷口面馆', year: 2025,
+    genres: ['comedy', 'romance'], genresRaw: ['喜剧', '爱情'], rating: 8.0, pop: 88,
+    featured: null, trending: false, type: 'series', eps: 12, dur: 40,
+    cast: ['Weng Xiaoman', 'Du Chengyi', 'Lu Pipa', 'Auntie Hao'],
+    director: 'Ruan Qiaosheng',
+    en: 'A food critic who torched a noodle shop in a review is sentenced by the internet to eat there every day for a year. The owner keeps count, and keeps score.',
+    id_: 'Kritikus makanan yang menghancurkan kedai mi dalam ulasannya dihukum internet untuk makan di sana setiap hari selama setahun.' },
+  { id: 820004, title: 'Midnight at Perfume House', original: '香阁夜话', year: 2023,
+    genres: ['thriller', 'drama'], genresRaw: ['悬疑', '剧情'], rating: 7.9, pop: 84,
+    featured: null, trending: false, type: 'series', eps: 20, dur: 45,
+    cast: ['Song Liuli', 'He Jinglan', 'Master Wei', 'Xiao Cui'],
+    director: 'Kang Weizhi',
+    en: 'Every midnight the 1930s perfume house blends one more scent for one more client — and every scent, the police later find, belongs to a missing person.',
+    id_: 'Setiap tengah malam rumah parfum tahun 1930-an meracik satu wewangian lagi untuk satu klien lagi — dan setiap wewangian ternyata milik orang yang hilang.' },
+  { id: 820005, title: 'Paper Cranes in Spring', original: '春日纸鹤', year: 2026,
+    genres: ['youth', 'romance'], genresRaw: ['青春', '爱情'], rating: 8.4, pop: 90,
+    featured: null, trending: false, type: 'series', eps: 16, dur: 40,
+    cast: ['Cheng Yuwei', 'Nan Qiao', 'Fei Dongdong', 'Teacher Gu'],
+    director: 'Bai Luoshan',
+    en: 'Two rival cram-school students fold paper cranes with exam wishes into the same library book for a year, never knowing the other is the person they sit behind.',
+    id_: 'Dua siswa bimbingan bersaing melipat origami berisi harapan ujian ke buku perpustakaan yang sama selama setahun, tanpa tahu mereka duduk bersebelahan.' },
+  { id: 820006, title: 'Wolf General of the Northern Pass', original: '北关狼将', year: 2022,
+    genres: ['action', 'historical'], genresRaw: ['动作', '古装'], rating: 7.6, pop: 80,
+    featured: null, trending: false, type: 'series', eps: 30, dur: 45,
+    cast: ['Huo Zhanbei', 'Princess Yelü', 'General Deng', 'Old Shi'],
+    director: 'Qin Hanjue',
+    en: 'The empire\'s exiled wolf general is recalled to hold the Northern Pass with a garrison of convicts, against a horde that knows his every tactic — because he taught it.',
+    id_: 'Jenderal serigala yang diasingkan dipanggil kembali untuk mempertahankan Gerbang Utara dengan pasukan tahanan, melawan musuh yang mengenal semua taktiknya.' },
+  { id: 820007, title: 'The Jade Mirror Case', original: '玉镜奇案', year: 2024,
+    genres: ['thriller', 'historical'], genresRaw: ['悬疑', '古装'], rating: 8.1, pop: 86,
+    featured: null, trending: false, type: 'series', eps: 18, dur: 45,
+    cast: ['Coroner Shen', 'Magistrate Pei', 'Widow Cui', 'Little An'],
+    director: 'Tang Shuyi',
+    en: 'A Tang-dynasty coroner who reads corpses and a magistrate who reads people work nine impossible cases, each one hiding a piece of the same jade mirror.',
+    id_: 'Tabib penggeledah dinasti Tang dan hakim yang membaca manusia menangani sembilan kasus mustahil, yang masing-masing menyimpan potongan cermin giok yang sama.' },
+  { id: 820008, title: 'Six Minutes to Fall in Love', original: '恋爱六分钟', year: 2025,
+    genres: ['romance'], genresRaw: ['爱情'], rating: 7.4, pop: 72,
+    featured: null, trending: false, type: 'short', eps: 8, dur: 6,
+    cast: ['Jiang Tingting', 'Ferryman No. 7', 'Baozi Granny', 'Raincoat Man'],
+    director: 'Yuan Xiaoman',
+    en: 'A city ferry ride takes six minutes. He has one season of six-minute episodes to make the commuter who sleeps through every stop miss her stop on purpose.',
+    id_: 'Perjalanan feri kota hanya enam menit. Ia punya satu musim untuk membuat penumpang yang selalu tertidur sengaja melewatkan pemberhentiannya.' },
+  { id: 820009, title: 'The Intern God of Wealth', original: '财神实习中', year: 2026,
+    genres: ['comedy', 'fantasy'], genresRaw: ['喜剧', '玄幻'], rating: 7.2, pop: 70,
+    featured: null, trending: false, type: 'short', eps: 10, dur: 7,
+    cast: ['Zhao Jinbao', 'Auditor Mei', 'Landlord Qian', 'The Debit Demon'],
+    director: 'Cui Dada',
+    en: 'Heaven\'s worst accountant is sent to a failing corner shop as an intern god of wealth: one month, one ledger, and every blessing he grants deducts from his own score.',
+    id_: 'Akuntan surga yang terburuk dikirim ke toko kelontong yang sekarat sebagai dewa kekayaan magang: setiap berkah yang ia berikan mengurangi nilainya sendiri.' },
+  { id: 820010, title: 'Campus Diary: Exam Week', original: '校园日记·考试周', year: 2026,
+    genres: ['youth'], genresRaw: ['青春'], rating: 7.0, pop: 66,
+    featured: null, trending: false, type: 'short', eps: 6, dur: 8,
+    cast: ['Gao Feifei', 'Monitor Zhou', 'Canteen Uncle', 'The Physics Paper'],
+    director: 'Lin Shuwan',
+    en: 'Six days before the gaokao, five classmates film one diary entry a night — a pact that outlives the exam and the year they thought would end everything.',
+    id_: 'Enam hari sebelum ujian negara, lima siswa merekam satu entri buku harian setiap malam — janji yang bertahan lebih lama dari ujian itu sendiri.' },
+];
+
+async function seedDemoCatalog() {
+  for (const s of DEMO_CATALOG) {
+    await pool.query(
+      `INSERT INTO dramas
+         (id, title, original_title, year, country, language, genres, genres_raw,
+          rating, popularity, featured, is_trending, is_demo, content_type,
+          total_episodes, episode_duration_min, cast_names, director,
+          synopsis_en, synopsis_id, verified, needs_review)
+       VALUES ($1, $2, $3, $4, 'cn', 'zh', $5, $6, $7, $8, $9, $10, true, $11,
+               $12, $13, $14, $15, $16, $17, false, false)
+       ON CONFLICT (id) DO NOTHING`,
+      [s.id, s.title, s.original, s.year, s.genres, s.genresRaw, s.rating, s.pop,
+        s.featured, s.trending, s.type, s.eps, s.dur, s.cast, s.director, s.en, s.id_]
+    );
+    for (let n = 1; n <= s.eps; n++) {
+      // Same pool assignment the imports use: a stride coprime with 6, so
+      // every demo drama cycles all six committed clips.
+      const video = VIDEO_BASE + VIDEO_POOL[(s.id * 5 + n) % VIDEO_POOL.length];
+      // Wolf General locks everything from episode 2 so the VIP paywall can
+      // be seen on a demo route; Campus Diary episode 3 has no video URL, so
+      // the player shows its streaming-unavailable state.
+      const access = s.id === 820006 && n >= 2 ? 'vip' : 'free';
+      const url = s.id === 820010 && n === 3 ? '' : video;
+      await pool.query(
+        `INSERT INTO episodes (drama_id, num, duration_min, video_url, access)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (drama_id, num) DO NOTHING`,
+        [s.id, n, s.dur, url, access]
+      );
+    }
+  }
+}
+
+// On the first ?demo=1 request of the viewing account, write its demo
+// progress and list rows, once, with fixed keys: two half-watched dramas
+// (Continue Watching) and two saved dramas (My List, and the genres that
+// drive Recommended for You). Idempotent; what the viewer does to them stays.
+const demoCatalogSeedPending = new Map();
+
+async function seedDemoCatalogViewer(user) {
+  const key = String(user.id);
+  if (demoCatalogSeedPending.has(key)) return demoCatalogSeedPending.get(key);
+  const p = (async () => {
+    const has = await pool.query(
+      `SELECT 1 FROM watch_progress WHERE user_id = $1 AND drama_id = 820001`, [user.id]
+    );
+    if (!has.rows.length) {
+      await pool.query(
+        `INSERT INTO watch_progress (user_id, drama_id, ep, seconds, duration, updated_at, is_demo)
+         VALUES ($1, 820001, 5, 620, 2700, now() - interval '2 hours', true),
+                ($1, 820005, 2, 95, 2400, now() - interval '3 days', true)
+         ON CONFLICT (user_id, drama_id) DO NOTHING`,
+        [user.id]
+      );
+      await pool.query(
+        `INSERT INTO my_list (user_id, drama_id, added_at, is_demo)
+         VALUES ($1, 820002, now() - interval '1 day', true),
+                ($1, 820007, now() - interval '5 days', true)
+         ON CONFLICT (user_id, drama_id) DO NOTHING`,
+        [user.id]
+      );
+    }
+  })();
+  demoCatalogSeedPending.set(key, p);
+  try {
+    await p;
+  } catch (err) {
+    console.error('demo catalog viewer seed failed', err);
+    demoCatalogSeedPending.delete(key);
+  }
+}
+
 // ── API routes ────────────────────────────────────────────────────────────
 
 // Who is signed in, if anyone (the page asks, not the URL: at the app's own
@@ -3894,20 +3840,16 @@ async function start() {
   await migrateLegacyTrackerTables();
   await pool.query(SCHEMA_SQL);
   await pool.query(CATALOG_ALTER_SQL);
-  await seedCatalog();
+  // The one-time content wipe must land before anything seeds the catalog:
+  // nothing reseeds it any more, but a later boot must also never delete
+  // dramas imported after the wipe (the marker guards that).
+  await wipeCatalogOnce();
   await ensureTrackerSchema();
-  // The real catalog import needs the schema and the sample seed in place
-  // (it computes new ids from MAX(id)); a failure never blocks boot.
-  try {
-    await seedRealDramas();
-  } catch (err) {
-    console.error('real catalog seed failed', err);
-  }
   if (IS_STAGING) {
     try {
-      await seedCatalogDemo();
       await seedTrackerDemo();
       await seedSampleDramas();
+      await seedDemoCatalog();
       await seedStagingVip();
     } catch (err) {
       console.error('staging demo seed failed', err);

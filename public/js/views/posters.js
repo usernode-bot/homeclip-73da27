@@ -512,16 +512,16 @@ export async function render({ view, query }) {
       });
       actions.appendChild(fix);
     }
-    // A record already flagged broken_link has at least one stored URL that
-    // does not load. Rendering it in a thumb makes the browser request it,
-    // which logs a failed-resource error for the whole page, so show the
-    // placeholder instead: the reason line says why, and Check artwork,
-    // Replace and the scan all still read the stored URLs server-side.
+    // A link the server reports as unresolvable (poster_ok/backdrop_ok
+    // false) or a record already flagged broken_link renders the placeholder
+    // straight away: the browser never requests a URL the record is already
+    // flagged over, so a broken stored link shows up as review state instead
+    // of a failed image load.
     const brokenArt = d.needs_review && d.review_reason === 'broken_link';
     const row = el(
       '<li><div class="list-row flex-wrap">' +
-        thumb(brokenArt ? null : d.poster_url, 'w-12 shrink-0') +
-        thumbBg(brokenArt ? null : d.backdrop_url, 'w-16 shrink-0') +
+        thumb(brokenArt || d.poster_ok === false ? null : d.poster_url, 'w-12 shrink-0') +
+        thumbBg(brokenArt || d.backdrop_ok === false ? null : d.backdrop_url, 'w-16 shrink-0') +
         '<span class="min-w-0 flex-1">' +
           '<span class="block truncate text-body font-medium text-fg">' + esc(d.title) + '</span>' +
           '<span class="block truncate text-small text-muted">' +

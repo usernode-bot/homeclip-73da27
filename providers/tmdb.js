@@ -131,8 +131,8 @@ async function artworkUrls(posterPath, backdropPath) {
   return { posterUrl, backdropUrl };
 }
 
-// TMDB genre names -> the app's six-genre vocabulary (+ drama). Unmapped
-// names stay in genres_raw only, never force-fitted.
+// TMDB genre names -> the app's genre vocabulary (+ drama, + youth).
+// Unmapped names stay in genres_raw only, never force-fitted.
 const GENRE_NAME_MAP = {
   'drama': 'drama',
   'romance': 'romance',
@@ -147,6 +147,9 @@ const GENRE_NAME_MAP = {
   'action & adventure': 'action',
   'action': 'action',
   'war & politics': 'action',
+  'family': 'youth',
+  'kids': 'youth',
+  'coming of age': 'youth',
 };
 
 function mapGenres(names) {
