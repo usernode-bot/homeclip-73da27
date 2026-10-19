@@ -24,6 +24,8 @@ const STRINGS = {
     'time.min': 'min',
 
     'home.search': 'Search dramas',
+    'home.empty': 'No dramas available yet',
+    'home.emptyBody': 'Check back soon!',
     'home.trending': 'Trending Now',
     'home.series': 'Popular Series',
     'home.recent': 'Recently Added',
@@ -71,6 +73,7 @@ const STRINGS = {
     'detail.verified': 'Metadata verified',
     'detail.verifiedSource': 'source themoviedb.org',
     'detail.needsReview': 'Metadata awaiting review',
+    'detail.tmdbNotice': 'This product uses the TMDB API but is not endorsed or certified by TMDB.',
 
     'mylist.title': 'My List',
     'mylist.tab.list': 'My List',
@@ -259,6 +262,8 @@ const STRINGS = {
     'time.min': 'mnt',
 
     'home.search': 'Cari drama',
+    'home.empty': 'Belum ada drama',
+    'home.emptyBody': 'Nantikan segera!',
     'home.trending': 'Sedang Tren',
     'home.series': 'Serial Populer',
     'home.recent': 'Baru ditambahkan',
@@ -306,6 +311,7 @@ const STRINGS = {
     'detail.verified': 'Metadata terverifikasi',
     'detail.verifiedSource': 'sumber themoviedb.org',
     'detail.needsReview': 'Metadata menunggu pemeriksaan',
+    'detail.tmdbNotice': 'Produk ini menggunakan TMDB API tetapi tidak didukung atau tersertifikasi oleh TMDB.',
 
     'mylist.title': 'Daftar Saya',
     'mylist.tab.list': 'Daftar Saya',

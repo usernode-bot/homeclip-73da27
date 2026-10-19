@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "build": "npm run build:css",
-    "build:css": "tailwindcss -c tailwind.config.js -i styles/tailwind-input.css -o public/tailwind.css --minify"
+    "build:css": "tailwindcss -c tailwind.config.js -i styles/tailwind-input.css -o public/tailwind.css --minify",
+    "verify:posters": "node scripts/verify-posters.js"
   },
   "dependencies": {
     "express": "^4.21.0",

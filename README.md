@@ -1,9 +1,10 @@
 # HomeClip
 
 Watch your homeroom's own serial drama together. HomeClip is a
-mobile-first drama streaming app built on Homeroom: browse an original
-sample catalog, read about each show, play episodes, keep a personal
-list, and pick up any episode where you left off.
+mobile-first drama streaming app built on Homeroom: browse the catalog
+your group fills in, read about each show, play episodes, keep a
+personal list, and pick up any episode where you left off. The catalog
+starts empty; dramas are added through the Posters studio.
 
 Phase 1 covers the full loop with no sign-up friction and no payments:
 
@@ -28,17 +29,31 @@ The group also keeps a shared **drama tracker** at `/tracker` (see below).
 
 ## Content
 
-All 30 dramas in `data/catalog.js` are invented for this app: original
-titles, synopses and cast names. The poster, backdrop and episode-still
-artwork (committed WebP under `public/img/`) are free-license
-photographs served via picsum.photos (Unsplash license), each chosen to
-match its drama's genre and mood; no real show, person or logo appears
-in any of them. The generated SVG art (`/poster/:id.svg`,
-`/banner/:id.svg`) remains as the fallback when an image fails to load.
-Episode video is one committed royalty-free sample
-clip (`public/sample/`, CC0, served as both `.webm` and `.mp4`) and
-sample subtitle files (`/subtitles/:lang.vtt`). Nothing copyrighted is
-used anywhere.
+The catalog ships empty. All bundled movie and drama content (an
+earlier invented sample catalog, a TMDB-curated boot seed and the
+staging demo dramas) was removed in October 2026, together with the
+watch history pointing at it; the deletion ran once per database
+through a marker-guarded boot migration (`wipeCatalogOnce` in
+`server.js`). Nothing reseeds catalog content: dramas arrive only
+through the Posters studio at `/posters`, where a signed-in member
+imports them from TMDB with the title and year verified against the
+provider record. A record without verified artwork shows the generated
+titled art (`/poster/:id.svg`, `/banner/:id.svg`) or the neutral
+placeholder — never a random or unrelated image.
+
+Episode video for imported dramas is the committed royalty-free clip
+pool (`public/sample/`, CC BY, Blender Foundation trims, served as both
+`.webm` and `.mp4`) plus sample subtitle files
+(`/subtitles/:lang.vtt`). Drama metadata from TMDB is attributed on the
+drama page ("This product uses the TMDB API but is not endorsed or
+certified by TMDB."). Nothing copyrighted is used anywhere.
+
+To verify the catalog once it holds imported dramas, run
+`npm run verify:posters` with `DATABASE_URL` and `TMDB_API_KEY` in the
+environment (add `--base <origin> --token <usernode JWT>` to also check
+the served app). It re-fetches every provider-linked record and fails
+unless the stored title, year, country and artwork URLs match it and
+the links load, with at least ten records fully verified.
 
 ## Running it
 
@@ -50,10 +65,10 @@ with precompiled Tailwind (`npm run build` compiles
 - `npm run build` then `node server.js` (needs `DATABASE_URL`,
   `USERNODE_JWT_PUBLIC_KEY`, `USERNODE_APP_ID`; the platform injects
   all of them).
-- Staging previews seed the shared catalog on boot; `?demo=1` on any
-  screen adds the viewer demo rows (My List entries and half-watched
-  episodes marked `is_demo`) so populated screens can be reviewed. The
-  plain routes stay the production shape without `?demo=1`.
+- Staging previews seed the tracker's demo dramas on boot (the catalog
+  itself stays empty); `?demo=1` on any screen keeps the demo rows
+  marked `is_demo` visible. The plain routes stay the production shape
+  without `?demo=1`.
 
 ## Drama tracker
 

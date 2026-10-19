@@ -214,4 +214,13 @@ export async function render({ view, params, query }) {
     epList.appendChild(row);
   }
   root.appendChild(epSection);
+
+  // Provider attribution, required for TMDB-sourced metadata and artwork.
+  // Shown only where TMDB data is actually on screen (a verified record);
+  // an app with no key and only sample content needs no notice.
+  if (d.verified || d.tmdb_id) {
+    root.appendChild(el(
+      '<p class="px-1 pt-4 text-small text-muted">' + t('detail.tmdbNotice') + '</p>'
+    ));
+  }
 }
