@@ -16,7 +16,8 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 // each committed as .mp4 (H.264+AAC) and .webm (VP9+Opus)). URLs are
 // extensionless; the player appends the extensions and offers both sources.
 // The pool carries no catalog content of its own: the bundled sample dramas
-// are gone (see wipeCatalogOnce) and only curator imports reference it.
+// are gone (see wipeCatalogOnce) and only the one-time boot import (see
+// importCatalogOnce) and curator imports reference it.
 const VIDEO_BASE = '';
 const VIDEO_POOL = [
   '/sample/bunny',     // Big Buck Bunny
@@ -437,6 +438,92 @@ async function wipeCatalogOnce() {
     [CATALOG_WIPE_KEY]
   );
   console.log('[catalog-wipe] removed ' + wiped.rowCount + ' dramas (one-time content wipe)');
+}
+
+// ── One-time catalog import ──────────────────────────────────────────────
+// Fills the catalog ONCE per database with a curated batch of real dramas
+// (data/catalog-import.js), through the same verified writer the Posters
+// studio route uses (importVerifiedDrama) — no second code path writes
+// catalog content. Marker-guarded like the October wipe. Without
+// TMDB_API_KEY it logs and returns WITHOUT the marker, so the first boot
+// after the key is added runs it; a provider fault mid-run also leaves the
+// marker off so the next boot retries (rows already written stay and count
+// as already present). Not awaited at boot: the round trips must never
+// delay listen or the health check.
+const CATALOG_IMPORT_KEY = 'catalog-import-2026-10';
+const { CATALOG_IMPORT } = require('./data/catalog-import');
+
+// A list entry matches a search candidate on year + origin country +
+// normalized title (either name, either side). Returns the candidate and
+// the provider name that matched, which the import re-confirms against
+// the full record it fetches.
+function matchCatalogEntry(items, entry) {
+  const names = new Set([normTitle(entry.title), normTitle(entry.original)]);
+  const match = items.find((c) => c.year === entry.year
+    && c.originCountry === entry.country
+    && (names.has(normTitle(c.title)) || names.has(normTitle(c.originalTitle))));
+  if (!match) return null;
+  return { tmdbId: match.tmdbId, confirmTitle: names.has(normTitle(match.title)) ? match.title : match.originalTitle };
+}
+
+async function importCatalogOnce() {
+  await pool.query(`CREATE TABLE IF NOT EXISTS app_migrations (
+    key TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  )`);
+  const done = await pool.query('SELECT 1 FROM app_migrations WHERE key = $1', [CATALOG_IMPORT_KEY]);
+  if (done.rowCount) return;
+  if (!tmdb.configured()) {
+    console.log('[catalog-import] TMDB_API_KEY not set, skipped');
+    return;
+  }
+  const imported = [];
+  const present = [];
+  const skipped = [];
+  try {
+    for (let i = 0; i < CATALOG_IMPORT.length; i++) {
+      const entry = CATALOG_IMPORT[i];
+      // Search by the English title first, then by the original title
+      // when no candidate matched. A provider fault (unreachable, auth,
+      // error) propagates and aborts the run below.
+      const match = matchCatalogEntry(await tmdb.searchTv(entry.title), entry)
+        || matchCatalogEntry(await tmdb.searchTv(entry.original), entry);
+      if (!match) { skipped.push(entry.title); continue; }
+      try {
+        const r = await importVerifiedDrama({
+          tmdbId: match.tmdbId,
+          confirmTitle: match.confirmTitle,
+          confirmYear: entry.year,
+          defaultArtwork: true,
+        });
+        // Only a newly created row reaches here (a present show answers
+        // tmdb_duplicate): set the curator flags the studio PATCH route
+        // also sets, so the banner, Trending Now and row order match the
+        // list's editorial order.
+        await pool.query(
+          'UPDATE dramas SET popularity = $1, featured = $2, is_trending = $3 WHERE id = $4',
+          [100 - i * 2, entry.featured ?? null, Boolean(entry.trending), r.id]
+        );
+        imported.push(entry.title);
+      } catch (e) {
+        if (e.code === 'tmdb_duplicate') { present.push(entry.title); continue; }
+        if (e.code === 'verify_failed' || e.code === 'unknown_artwork') {
+          skipped.push(entry.title); continue;
+        }
+        throw e;
+      }
+    }
+    await pool.query(
+      'INSERT INTO app_migrations (key) VALUES ($1) ON CONFLICT DO NOTHING',
+      [CATALOG_IMPORT_KEY]
+    );
+    console.log(`[catalog-import] imported ${imported.length}, already present ${present.length}, skipped ${skipped.length}`
+      + (skipped.length ? ': ' + skipped.join(', ') : ''));
+  } catch (e) {
+    // A coded provider fault (tmdb_unreachable / tmdb_auth / tmdb_error) or
+    // anything unexpected: abort without the marker so the next boot retries.
+    console.error('[catalog-import] aborted, will retry on next boot:', e.code || '', e.message);
+  }
 }
 
 // The viewing account's demo PROFILES: two fake profiles written once on
@@ -2435,36 +2522,43 @@ const demoSeedPending = new Map();
 
 async function seedDemoViewer(user) {
   // Follow times are set so Harbour Lights sorts before The Quiet Wing in
-  // Next to watch (its latest watch is the most recent of the two).
+  // Next to watch (its latest watch is the most recent of the two). The
+  // seed runs on the account's first ?demo=1 request, whose answers wait
+  // for it (see the tracker middleware), so it stays a handful of batched
+  // statements rather than one round trip per row.
   await pool.query(
     `INSERT INTO tracker_follows (user_id, username, drama_id, created_at)
-     VALUES ($1, $2, 900001, now() - interval '3 days') ON CONFLICT DO NOTHING`,
-    [user.id, user.username]
-  );
-  await pool.query(
-    `INSERT INTO tracker_follows (user_id, username, drama_id, created_at)
-     VALUES ($1, $2, 900002, now() - interval '3 hours') ON CONFLICT DO NOTHING`,
+     VALUES ($1, $2, 900001, now() - interval '3 days'),
+            ($1, $2, 900002, now() - interval '3 hours')
+     ON CONFLICT DO NOTHING`,
     [user.id, user.username]
   );
   const eps = await pool.query(`SELECT id, drama_id, season, number FROM tracker_episodes WHERE is_demo = true`);
   const byKey = new Map(eps.rows.map(r => [r.drama_id + ':' + r.season + ':' + r.number, r.id]));
-  const put = (epId, ago) => pool.query(
-    `INSERT INTO tracker_watches (user_id, username, episode_id, watched_at)
-     VALUES ($1, $2, $3, now() - $4::interval) ON CONFLICT DO NOTHING`,
-    [user.id, user.username, epId, ago]
-  );
-  // Harbour Lights: season 1 done, season 2 up to and including episode 5.
-  for (let number = 1; number <= 6; number++) {
-    const epId = byKey.get('900001:1:' + number);
-    if (epId) await put(epId, '2 days');
-  }
-  for (let number = 1; number <= 5; number++) {
-    const epId = byKey.get('900001:2:' + number);
-    if (epId) await put(epId, '2 hours');
-  }
-  // All of Copper Hill.
+  // Harbour Lights: season 1 done, season 2 up to and including episode 5;
+  // and all of Copper Hill. One statement for the whole watch set.
+  const wanted = [];
+  for (let number = 1; number <= 6; number++) wanted.push(['900001:1:' + number, '2 days']);
+  for (let number = 1; number <= 5; number++) wanted.push(['900001:2:' + number, '2 hours']);
   for (const row of eps.rows) {
-    if (String(row.drama_id) === '900005') await put(row.id, '5 days');
+    if (String(row.drama_id) === '900005') {
+      wanted.push([row.drama_id + ':' + row.season + ':' + row.number, '5 days']);
+    }
+  }
+  const values = [];
+  const params = [user.id, user.username];
+  for (const [key, ago] of wanted) {
+    const epId = byKey.get(key);
+    if (!epId) continue;
+    values.push(`($1, $2, $${params.length + 1}, now() - $${params.length + 2}::interval)`);
+    params.push(epId, ago);
+  }
+  if (values.length) {
+    await pool.query(
+      `INSERT INTO tracker_watches (user_id, username, episode_id, watched_at)
+       VALUES ${values.join(', ')} ON CONFLICT DO NOTHING`,
+      params
+    );
   }
   // Phase 4a: the viewer's own demo comment and review, once, with fixed
   // ids/keys, so "Delete" and "Your review" can be seen on the demo route.
@@ -2624,9 +2718,9 @@ async function seedStagingVip() {
 }
 
 // ── Staging demo catalog ──────────────────────────────────────────────────
-// The streaming catalog ships EMPTY and nothing reseeds it (see the October
-// 2026 wipe): new dramas arrive only through the Posters studio. But a
-// staging preview of an empty catalog would show nothing to review, so —
+// Besides the one-time verified import (importCatalogOnce), new dramas
+// arrive only through the Posters studio. But a staging preview of an
+// empty catalog would show nothing to review, so —
 // like the tracker's demo dramas — staging seeds ten obviously fictional
 // Chinese dramas, fixed ids 820001-820010, is_demo = true. Every plain route
 // leaves is_demo rows out, so production reads stay production-shaped and
@@ -3828,8 +3922,9 @@ async function start() {
   await pool.query(SCHEMA_SQL);
   await pool.query(CATALOG_ALTER_SQL);
   // The one-time content wipe must land before anything seeds the catalog:
-  // nothing reseeds it any more, but a later boot must also never delete
-  // dramas imported after the wipe (the marker guards that).
+  // a later boot must never delete dramas imported after the wipe (the
+  // marker guards that). Right after listen, the one-time catalog import
+  // fills an empty database (not awaited — see importCatalogOnce).
   await wipeCatalogOnce();
   await ensureTrackerSchema();
   if (IS_STAGING) {
@@ -3843,6 +3938,7 @@ async function start() {
     }
   }
   server = app.listen(port, () => console.log(`Listening on :${port}`));
+  importCatalogOnce().catch((e) => console.error('[catalog-import] failed', e));
   // Let Envoy retire idle upstream connections at 60s, with a 15s margin.
   server.keepAliveTimeout = 75_000;
 }

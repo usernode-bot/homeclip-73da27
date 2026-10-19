@@ -102,18 +102,25 @@ My List and watch history, and a Profile with language and theme
 settings. The whole UI is bilingual (English / Bahasa Indonesia). No
 sign-up beyond the platform identity, no payments.
 
-The catalog ships EMPTY. Every bundled movie and drama (the 30 invented
-sample dramas that used to live in `data/catalog.js`, the TMDB-curated
-boot seed that used to live in `data/real-catalog.js`, and the staging
-demo dramas) was removed in October 2026, together with the watch
-history and My List rows that pointed at it. The deletion ran exactly
-once per database through `wipeCatalogOnce` (server.js): a boot
+The catalog fills itself once. Every bundled movie and drama (the 30
+invented sample dramas that used to live in `data/catalog.js`, the
+TMDB-curated boot seed that used to live in `data/real-catalog.js`, and
+the staging demo dramas) was removed in October 2026, together with the
+watch history and My List rows that pointed at it. The deletion ran
+exactly once per database through `wipeCatalogOnce` (server.js): a boot
 migration guarded by the `catalog-wipe-2026-10` marker row in
 `app_migrations`, so later restarts never touch dramas imported after
-it. Nothing reseeds catalog content. New dramas arrive only through the
-Posters studio (`/posters`, TMDB-verified import via
-`importVerifiedDrama`, acceptance script `npm run verify:posters`) and
-play from the committed six-clip pool in `public/sample/`.
+it. The catalog is then filled by `importCatalogOnce` (server.js): a
+one-time, marker-guarded boot import (`catalog-import-2026-10`) of the
+curated list in `data/catalog-import.js`, run per entry through the
+same TMDB-verified writer as the studio (`importVerifiedDrama`). It
+needs `TMDB_API_KEY` — without it the boot logs a skip and leaves the
+marker off, so a later boot with the key runs it. A provider fault
+mid-run also leaves the marker off and retries on the next boot.
+Additional dramas arrive any time through the Posters studio
+(`/posters`, TMDB-verified import via `importVerifiedDrama`,
+acceptance script `npm run verify:posters`). Everything plays from the
+committed six-clip pool in `public/sample/`.
 
 ## Design
 
@@ -208,9 +215,10 @@ keeping every text pair at 4.5:1 or more in both looks.
   (server.js): it re-fetches the provider record and fails closed
   unless the confirmed title matches the provider's title OR original
   title (normalized) and the year matches, and artwork paths come from
-  THAT record's own image lists. The studio import route
-  (`POST /api/admin/dramas/import`) is the only writer of catalog
-  content; no boot seed exists any more. Verified detail pages carry
+  THAT record's own image lists. All catalog content is written through
+  `importVerifiedDrama`: the studio import route
+  (`POST /api/admin/dramas/import`) and the one-time boot import
+  (`importCatalogOnce`) alike. Verified detail pages carry
   the TMDB attribution notice (`detail.tmdbNotice`).
 - **Acceptance check:** `npm run verify:posters`
   (`scripts/verify-posters.js`) re-fetches every provider-linked
