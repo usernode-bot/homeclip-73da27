@@ -184,9 +184,18 @@ export async function render({ view, query }) {
         t('demo.note') + '</p>'
     ));
   }
+  // "Empty" means nothing at all to show in any row: the featured banner,
+  // every viewer row and every genre row are all empty. Only then do the
+  // genre chips hide (filtering nothing feels broken) and the empty state
+  // show; the search stays either way.
+  const rowsEmpty = (v) => !(v || []).filter(Boolean).length;
+  const isEmpty = ['featured', 'continue', 'watchlist', 'trending', 'recommended',
+    'series', 'shortDramas', 'recent', 'top10'].every((k) => rowsEmpty(data[k])) &&
+    (data.genreRows || []).every((gr) => !gr.items || !gr.items.length);
+
   buildSearch(view, demoParam);
   buildBanner(data.featured, view, demoParam);
-  buildChips(view);
+  if (!isEmpty) buildChips(view);
 
   // On the demo page every link keeps ?demo=1 so a demo drama's detail
   // and player routes (which hide is_demo rows without it) keep working.
@@ -251,10 +260,13 @@ export async function render({ view, query }) {
     view.appendChild(hRow(genreLabel(gr.genre), gr.items.map((d) => cardD(d))));
   }
 
-  // Nothing in the catalog yet (and nothing to continue): the search and
-  // the genre chips above stay, the rows are gone, and one quiet empty
-  // state says where the content would be.
-  if (!data.featured.length && !continueRow.length && !trendingRow.length) {
-    view.appendChild(emptyState(t('home.empty'), t('home.emptyBody')));
+  // Nothing in the catalog yet (and nothing to continue): the search
+  // stays, the genre chips above are hidden, the rows are gone, and the
+  // empty state explains why and opens the group's drama tracker.
+  if (isEmpty) {
+    view.appendChild(emptyState(t('home.empty'), t('home.emptyBody'), {
+      href: '/tracker',
+      label: t('home.emptyAction'),
+    }));
   }
 }

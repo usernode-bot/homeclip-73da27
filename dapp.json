@@ -37,7 +37,11 @@
     {
       "name": "Home renders",
       "path": "/",
-      "expectText": "Browse by genre",
+      "expectText": "No dramas available yet"
+    },
+    { "name": "Home empty state opens the tracker",
+      "path": "/",
+      "expectText": "Open the drama tracker",
       "impact": ["server.js", "public/js/views/home.js", "public/js/ui.js", "public/js/i18n.js", "styles/**"]
     },
     { "name": "Discover renders", "path": "/discover", "expectText": "Discover" },
