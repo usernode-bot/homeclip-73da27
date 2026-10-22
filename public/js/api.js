@@ -15,6 +15,14 @@ export function getToken() {
   return TOKEN;
 }
 
+// Drop the sign-in this tab is holding (it has gone stale): the next request
+// carries no token, so the platform edge's own identity header, or a guest
+// token, has its say.
+export function forgetToken() {
+  TOKEN = null;
+  try { sessionStorage.removeItem('hc:token'); } catch {}
+}
+
 export function askForAccount(action) {
   try {
     if (window.usernode && window.usernode.askForAccount) {
@@ -55,6 +63,14 @@ export async function api(path, opts = {}) {
     const err = new Error((data && data.error) || 'http_' + res.status);
     err.code = data && data.error ? data.error : 'http_' + res.status;
     err.status = res.status;
+    // The token this tab cached has gone stale (the shell keeps the app
+    // loaded past its lifetime). Forget it and try once more without it,
+    // so the edge's own identity header applies. A 401 on a write means
+    // nothing was written, so repeating it is safe.
+    if (res.status === 401 && err.code !== 'account_required' && TOKEN && !opts._retried) {
+      forgetToken();
+      return api(path, { ...opts, _retried: true });
+    }
     // Guests trying to write: the bridge turns account_required into the
     // sign-in sheet, so surface it rather than a generic failure.
     if (err.code === 'account_required') askForAccount(opts.action);

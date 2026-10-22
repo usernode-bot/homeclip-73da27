@@ -53,7 +53,7 @@ export async function render({ view, query }) {
     facets = await api('/api/facets');
   } catch (e) {
     view.innerHTML = '';
-    view.appendChild(errorState(() => render({ view, query })));
+    view.appendChild(errorState(() => render({ view, query }), { screen: 'discover', error: e }));
     return;
   }
 
@@ -193,7 +193,7 @@ export async function render({ view, query }) {
     } catch (e) {
       grid.innerHTML = '';
       grid.appendChild(el('<div class="col-span-3 sm:col-span-4"></div>'));
-      grid.firstElementChild.appendChild(errorState(refresh));
+      grid.firstElementChild.appendChild(errorState(refresh, { screen: 'discover', error: e }));
     }
   }
 
@@ -222,7 +222,7 @@ export async function render({ view, query }) {
     renderPage(r, false);
   } catch (e) {
     view.innerHTML = '';
-    view.appendChild(errorState(() => render({ view, query })));
+    view.appendChild(errorState(() => render({ view, query }), { screen: 'discover', error: e }));
     return;
   }
 }

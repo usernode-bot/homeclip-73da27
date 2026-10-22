@@ -2,7 +2,7 @@
 // screen only loads when it is opened. The bottom tab bar lives here.
 
 import { t } from './i18n.js';
-import { icon } from './ui.js';
+import { icon, errorState } from './ui.js';
 import { store, applyTheme } from './store.js';
 import { getToken } from './api.js';
 
@@ -33,6 +33,9 @@ const TABS = [
 ];
 
 let cleanup = null;
+// Which render is the latest: a screen that throws after the viewer has
+// already moved on must not overwrite the newer screen.
+let renderSeq = 0;
 
 // Per-tab scroll memory, for the session only: the offset a tab route was
 // left at, keyed by its path (query excluded, so Discover's filter rewrites
@@ -74,6 +77,7 @@ export function refreshTabbar() {
 }
 
 export async function render() {
+  const seq = ++renderSeq;
   let path = location.pathname.replace(/\/+$/, '') || '/';
   if (path === '') path = '/';
   // Leaving a tab route: remember where the viewer had scrolled, so
@@ -104,6 +108,13 @@ export async function render() {
     }
   } catch (err) {
     console.error('render failed', err);
+    // A screen that breaks while being drawn (or fails to import) gets the
+    // error box in place of its content, never a blank page or a skeleton
+    // that never finishes. Only the latest render may draw it.
+    if (seq === renderSeq && container) {
+      container.innerHTML = '';
+      container.appendChild(errorState(() => render(), { screen: route.tab, error: err }));
+    }
   } finally {
     lastPath = path;
     lastWasTab = !!route.tab;

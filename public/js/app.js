@@ -15,7 +15,9 @@ try {
   await fetchMe();
 } catch (e) {
   console.warn('me failed', e && e.message);
-  store.me = { user: null, guest: false, settings: store.settings, platformLocale: null };
+  // meFailed lets Profile say "Your account didn't load" instead of
+  // treating a member as a signed-out visitor.
+  store.me = { user: null, guest: false, settings: store.settings, platformLocale: null, meFailed: true };
 }
 
 applyLang();

@@ -44,7 +44,7 @@ export async function render({ view, query }) {
     ]);
   } catch (e) {
     view.innerHTML = '';
-    view.appendChild(errorState(() => render({ view, query })));
+    view.appendChild(errorState(() => render({ view, query }), { screen: 'mylist', error: e }));
     return;
   }
 
