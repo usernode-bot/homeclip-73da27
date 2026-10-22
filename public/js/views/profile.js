@@ -5,7 +5,7 @@
 import { askForAccount } from '../api.js';
 import { el, icon, toast } from '../ui.js';
 import { t } from '../i18n.js';
-import { store, saveSettings } from '../store.js';
+import { store, saveSettings, fetchMe, applyLang } from '../store.js';
 
 export async function render({ view }) {
   view.innerHTML = '';
@@ -13,6 +13,9 @@ export async function render({ view }) {
 
   const me = store.me || { user: null, guest: false };
   const user = me.user;
+  // /api/me failed at boot: the person is probably a member whose account
+  // could not be loaded, not a signed-out visitor.
+  const meFailed = !!(me.meFailed && !user);
   const settings = store.settings;
 
   view.innerHTML = '';
@@ -26,13 +29,35 @@ export async function render({ view }) {
     '<div class="hc-profile card flex items-center gap-3">' +
       avatar +
       '<div class="min-w-0">' +
-        '<p class="text-heading">' + (user ? '@' + user.username : t('profile.guest')) + '</p>' +
+        '<p class="text-heading">' + (user ? '@' + user.username : t(meFailed ? 'profile.meFailedTitle' : 'profile.guest')) + '</p>' +
         '<p class="text-small text-muted">' + (user ? t('profile.member') : '') + '</p>' +
       '</div>' +
     '</div>'
   ));
 
-  if (!user) {
+  if (!user && meFailed) {
+    // Same bordered box as the guest note, with Retry in place of "Make an
+    // account": the settings below keep working from this device.
+    const failedCard = el(
+      '<div class="mt-4 rounded-xl border border-line bg-surface p-4" role="alert">' +
+        '<p class="text-body text-muted">' + t('profile.meFailedBody') + '</p>' +
+      '</div>'
+    );
+    const retry = el('<button type="button" class="btn-secondary mt-3">' + t('common.retry') + '</button>');
+    retry.addEventListener('click', async () => {
+      retry.disabled = true;
+      try {
+        await fetchMe();
+        // A successful load replaces store.me (clearing meFailed) and the
+        // language event re-renders this screen.
+        applyLang();
+      } catch (e) {
+        await render({ view });
+      }
+    });
+    failedCard.appendChild(retry);
+    view.appendChild(failedCard);
+  } else if (!user) {
     const guestCard = el(
       '<div class="mt-4 rounded-xl border border-line bg-surface p-4">' +
         '<p class="text-body text-muted">' + t('profile.guestBody') + '</p>' +

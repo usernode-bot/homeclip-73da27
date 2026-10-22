@@ -107,12 +107,34 @@ function requestNow(req) {
   return typeof raw === 'string' && PREVIEW_NOW.test(raw) ? new Date(raw) : new Date();
 }
 
+// Every token a request carries, tried in turn: the query value (one string,
+// or one per entry when Express parsed a repeated ?token= into an array),
+// then the header, split on commas. A stale cached token in one place must
+// not hide a valid one in another; each candidate still gets the same pinned
+// verification below, so this opens no new way to sign in.
+function tokenCandidates(req) {
+  const list = [];
+  const add = (value) => {
+    if (typeof value !== 'string') return;
+    for (const part of value.split(',')) {
+      const token = part.trim();
+      if (token && !list.includes(token)) list.push(token);
+    }
+  };
+  const query = req.query.token;
+  if (Array.isArray(query)) query.forEach(add);
+  else add(query);
+  add(req.headers['x-usernode-token']);
+  return list;
+}
+
 // Verify platform-issued JWT if one was passed, then enforce auth on
 // anything not explicitly marked public.
 app.use((req, res, next) => {
   req.now = requestNow(req);
-  const token = req.query.token || req.headers['x-usernode-token'];
-  if (token && JWT_PUBLIC_KEY && APP_AUDIENCE) {
+  const tokens = tokenCandidates(req);
+  for (const token of tokens) {
+    if (req.user || !JWT_PUBLIC_KEY || !APP_AUDIENCE) break;
     try {
       // Pin the algorithm, issuer and audience: without `algorithms` a
       // caller could hand us an HS256 token signed with the public PEM
@@ -125,7 +147,8 @@ app.use((req, res, next) => {
       if (claims && claims.pur === 'iframe') req.user = claims;
     } catch {}
   }
-  if (!req.user && token && GUEST_PUBLIC_KEY && GUEST_AUDIENCE) {
+  for (const token of tokens) {
+    if (req.user || req.guest || !GUEST_PUBLIC_KEY || !GUEST_AUDIENCE) break;
     try {
       const guest = jwt.verify(token, GUEST_PUBLIC_KEY, {
         algorithms: ['ES256'],

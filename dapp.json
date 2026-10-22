@@ -45,6 +45,8 @@
       "impact": ["server.js", "public/js/views/home.js", "public/js/ui.js", "public/js/i18n.js", "styles/**"]
     },
     { "name": "Discover renders", "path": "/discover", "expectText": "Discover" },
+    { "name": "My List renders", "path": "/my-list", "expectText": "My List" },
+    { "name": "Profile renders", "path": "/profile", "expectText": "Settings" },
     { "name": "Search shows its empty state", "path": "/search?q=zzzz", "expectText": "No matches" },
     { "id": "demo-feed", "name": "Tracker populated demo", "path": "/tracker?demo=1", "expectText": "The Tide Table", "visual": true, "impact": ["public/tracker.html", "public/app.js", "public/screens.css", "styles/**"] },
     { "id": "home-rows", "name": "Tracker browse rows", "path": "/tracker?demo=1", "expectText": "Trending Now", "visual": true, "impact": ["public/tracker.html", "public/app.js", "public/screens.css", "styles/**", "server.js"] },

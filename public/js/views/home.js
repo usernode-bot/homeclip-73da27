@@ -173,7 +173,7 @@ export async function render({ view, query }) {
     data = await api('/api/home' + demoParam);
   } catch (e) {
     view.innerHTML = '';
-    view.appendChild(errorState(() => render({ view, query })));
+    view.appendChild(errorState(() => render({ view, query }), { screen: 'home', error: e }));
     return;
   }
 

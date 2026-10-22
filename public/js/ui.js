@@ -245,11 +245,26 @@ export function skeletonDetail() {
 }
 
 // ── States ───────────────────────────────────────────────────────────────
-export function errorState(retry) {
+// opts.screen (home | discover | mylist | profile) names the tab that failed
+// and why; without it the generic text the other screens use stays.
+const ERROR_SCREENS = ['home', 'discover', 'mylist', 'profile'];
+
+export function errorState(retry, opts) {
+  const o = opts || {};
+  let title = t('common.errorTitle');
+  let body = t('common.errorBody');
+  if (ERROR_SCREENS.includes(o.screen)) {
+    const err = o.error || {};
+    const reason = err.code === 'network' ? 'error.offline'
+      : (err.status === 401 ? 'error.signIn' : 'error.server');
+    title = t('error.title', { screen: t('tab.' + o.screen) });
+    body = t(reason) + ' ' +
+      t(o.screen === 'profile' ? 'error.stillWorksProfile' : 'error.stillWorks');
+  }
   const box = el(
     '<div class="state-error" role="alert">' +
-      '<p class="text-heading">' + t('common.errorTitle') + '</p>' +
-      '<p class="text-body text-muted">' + t('common.errorBody') + '</p>' +
+      '<p class="text-heading">' + title + '</p>' +
+      '<p class="text-body text-muted">' + body + '</p>' +
     '</div>'
   );
   const btn = el('<button class="btn-secondary mt-2"></button>');
