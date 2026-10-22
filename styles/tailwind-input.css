@@ -355,6 +355,160 @@
     animation: hc-spin 1s linear infinite;
   }
 
+  /* ── Contributor Studio (Chinese Drama Hub Studio) ───────────────────── */
+
+  /* The Studio's fixed dark top bar: it is dark chrome in BOTH looks, like
+     the player stage, so its colours are literal (never the theme's
+     ground/fg tokens). Stays put while the work area scrolls. */
+  .studio-bar {
+    @apply fixed inset-x-0 top-0 z-40 flex items-center gap-2 border-b border-white/10 px-4 text-white;
+    background: rgb(10 10 22);
+    min-height: 3.5rem;
+  }
+  .studio-bar .studio-mark {
+    @apply flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent text-on-accent;
+  }
+  .studio-bar .studio-name {
+    @apply mr-auto truncate text-body font-semibold;
+  }
+  .studio-bar .studio-nav {
+    @apply hidden items-center gap-5 text-small sm:flex;
+  }
+  .studio-bar .studio-nav a {
+    @apply text-white/75 no-underline hover:text-white
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70;
+  }
+  .studio-bar .studio-nav a.is-active {
+    @apply text-white;
+  }
+  /* The one filled action, in the app's existing amber action colour. */
+  .studio-upload {
+    @apply inline-flex min-h-10 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-action px-3 text-small
+      font-semibold text-on-action hover:brightness-110
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70;
+  }
+  /* The Studio is the one screen that widens past the app's single centred
+     column: a sidebar beside the work area needs the room. The class is
+     doubled so it beats the page-column utility it sits on (same element). */
+  .studio-view.studio-view {
+    max-width: 64rem;
+  }
+
+  /* The bar is fixed: reserve its height at the top of the work area. */
+  .studio-body {
+    padding-top: 3.5rem;
+  }
+
+  /* Wide window: the nested sidebar beside the work area; a phone keeps one
+     column and swaps the sidebar for a genre chip row. */
+  .studio-panes {
+    @apply flex flex-col gap-4 md:flex-row md:items-start md:gap-6;
+  }
+  .studio-side {
+    @apply shrink-0 md:w-64;
+  }
+  .studio-main {
+    @apply min-w-0 flex-1;
+  }
+
+  /* The nested genre tree: a real nested list, current genre marked. */
+  .studio-tree {
+    @apply list-none p-0 text-small;
+  }
+  .studio-tree li {
+    @apply flex min-h-9 items-center gap-2 rounded-lg px-2 text-fg;
+  }
+  .studio-tree .lv2 {
+    @apply pl-5;
+  }
+  .studio-tree .lv3 {
+    @apply pl-9;
+  }
+  .studio-tree button {
+    @apply flex min-h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-small text-fg
+      hover:bg-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus;
+  }
+  .studio-tree button.on {
+    @apply bg-raised font-semibold;
+  }
+  .studio-tree .studio-count {
+    @apply ml-auto text-small text-muted;
+  }
+
+  /* On a phone the nested tree becomes a row of tappable genre chips above
+     the form: the root labels and the level indents drop away, leaving the
+     same list the wide sidebar shows. */
+  @media (max-width: 767px) {
+    /* The root labels and the section heading drop away; the genre rows and
+       the series groups become the chip row. */
+    .studio-side .studio-root,
+    .studio-side .studio-sub {
+      display: none;
+    }
+    .studio-side .studio-tree,
+    .studio-side .studio-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      padding: 0;
+    }
+    .studio-side .studio-tree > li,
+    .studio-side .studio-chips > li {
+      min-height: 0;
+      padding-left: 0;
+    }
+    .studio-side .studio-genrebtn {
+      width: auto;
+      border: 1px solid rgb(var(--line));
+      border-radius: 99px;
+      background: rgb(var(--surface));
+      padding: 0 0.75rem;
+    }
+    .studio-side .studio-genrebtn.on {
+      background: rgb(var(--accent));
+      border-color: transparent;
+      color: rgb(var(--on-accent));
+    }
+    .studio-side .studio-genrebtn .studio-count {
+      display: none;
+    }
+    .studio-side .studio-chips > li,
+    .studio-side .studio-empty {
+      border: 1px solid rgb(var(--line));
+      border-radius: 99px;
+      background: rgb(var(--surface));
+      padding: 0 0.75rem;
+    }
+    .studio-side .studio-empty .studio-count {
+      margin-left: 0.5rem;
+    }
+  }
+
+  /* A labelled drag-and-drop zone: dashed border, tap or drop to upload. */
+  .studio-drop {
+    @apply flex w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-line
+      bg-raised p-4 text-center;
+    min-height: 9rem;
+  }
+  .studio-drop.small {
+    min-height: 6.5rem;
+  }
+  .studio-drop.is-over {
+    @apply border-accent bg-surface;
+  }
+  .studio-drop img {
+    @apply h-full w-full object-cover;
+  }
+  .studio-drop .studio-drop-preview {
+    @apply block overflow-hidden rounded-lg border border-line bg-surface;
+    aspect-ratio: 2 / 3;
+    width: 4rem;
+  }
+  .studio-drop.small .studio-drop-preview {
+    aspect-ratio: 16 / 9;
+    width: 7rem;
+  }
+
   /* Segmented control (Language, Theme). */
   .hc-segment {
     @apply flex gap-1 rounded-lg border border-line bg-surface p-1;

@@ -2052,6 +2052,45 @@ async function ensureTrackerSchema() {
   await pool.query(`ALTER TABLE tracker_episodes ADD COLUMN IF NOT EXISTS media_url TEXT`);
   await pool.query(`ALTER TABLE tracker_episodes ADD COLUMN IF NOT EXISTS subtitle_url TEXT`);
 
+  // ── Contributor Studio (the Chinese Drama Hub Studio) ──────────────────
+  // The Studio builds a drama title and its first season in one screen, on
+  // top of the tracker's own tables (a new title lands in the group's feed
+  // at /tracker, never in Home's verified catalog). Every column is
+  // nullable or defaulted, so existing databases migrate in place, and every
+  // table here is group content a stranger already sees in the tracker, so
+  // all of them stay public (no staging:private comment).
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS studio TEXT
+    CHECK (studio IS NULL OR length(studio) <= 60)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS studio_series (
+      id BIGSERIAL PRIMARY KEY,
+      name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 80),
+      created_by_id BIGINT,
+      created_by_username TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
+  // A drama may be linked into one series group (the sidebar's "Series
+  // groups"); the link is nullable so existing dramas keep working.
+  await pool.query(`ALTER TABLE tracker_dramas ADD COLUMN IF NOT EXISTS series_id BIGINT
+    REFERENCES studio_series(id) ON DELETE SET NULL`);
+  // One row per season of a drama: the season container's poster and its
+  // finale tick.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tracker_seasons (
+      drama_id BIGINT NOT NULL REFERENCES tracker_dramas(id) ON DELETE CASCADE,
+      season INT NOT NULL CHECK (season BETWEEN 1 AND 99),
+      poster_url TEXT CHECK (poster_url IS NULL OR length(poster_url) <= 500),
+      is_finale BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (drama_id, season)
+    )`);
+  // Episodes gain a short description, a thumbnail and a finale marker.
+  await pool.query(`ALTER TABLE tracker_episodes ADD COLUMN IF NOT EXISTS description TEXT
+    CHECK (description IS NULL OR length(description) <= 500)`);
+  await pool.query(`ALTER TABLE tracker_episodes ADD COLUMN IF NOT EXISTS thumbnail_url TEXT
+    CHECK (thumbnail_url IS NULL OR length(thumbnail_url) <= 500)`);
+  await pool.query(`ALTER TABLE tracker_episodes ADD COLUMN IF NOT EXISTS is_finale BOOLEAN NOT NULL DEFAULT false`);
+
   // Where the viewer stopped in an episode (the player reports it).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS playback (
@@ -2395,6 +2434,61 @@ async function seedDemoCommunity() {
        VALUES ($1, $2, $3, $4, $5, now() - $6::interval, now() - $6::interval)
        ON CONFLICT (drama_id, user_id) DO NOTHING`,
       [dramaId, DEMO_USERS[name], name, rating, note, ago]
+    );
+  }
+}
+
+// ── Contributor Studio seed (staging only) ───────────────────────────────
+// The Studio's own tables (studio_series, tracker_seasons) and its new
+// columns are empty in a staging copy, so seed one obviously fake title with
+// a season, three episodes and a series group: enough for the sidebar, the
+// episode list and the season poster zone to have something to show. Fixed
+// ids, ON CONFLICT DO NOTHING, a fake contributor (not the viewing account),
+// and nothing here runs in production. The existing demo dramas
+// 910001-910012 keep their own rows and are left alone.
+const STUDIO_DEMO_DRAMA_ID = 935001;
+// A tiny data-URI placeholder poster: a staging season row must not point at
+// a real /app-files/ URL (the storage convention), and this stays well under
+// the column's 500-character limit.
+const STUDIO_DEMO_POSTER = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='90'%3E%3Crect width='60' height='90' rx='6' fill='%235c4aeb'/%3E%3C/svg%3E";
+
+async function seedStudioDemo() {
+  await pool.query(
+    `INSERT INTO studio_series (id, name, created_by_id, created_by_username)
+     VALUES (936001, 'Staging demo series', 7100099, 'staging-demo-user')
+     ON CONFLICT (id) DO NOTHING`
+  );
+  await pool.query(
+    `INSERT INTO tracker_dramas
+       (id, title, synopsis, genres, studio, series_id, added_by_id, added_by_username, is_demo, created_at)
+     VALUES ($1, 'Staging demo drama: The Porcelain Road',
+             'Staging demo: a porcelain restorer follows a broken set across three provinces.',
+             'Adventure, Fantasy', 'Staging demo studio', 936001,
+             7100099, 'staging-demo-user', true, now() - interval '6 days')
+     ON CONFLICT (id) DO NOTHING`,
+    [STUDIO_DEMO_DRAMA_ID]
+  );
+  await pool.query(
+    `INSERT INTO tracker_seasons (drama_id, season, poster_url, is_finale)
+     VALUES ($1, 1, $2, false)
+     ON CONFLICT (drama_id, season) DO NOTHING`,
+    [STUDIO_DEMO_DRAMA_ID, STUDIO_DEMO_POSTER]
+  );
+  const eps = [
+    [9351001, 1, 1, 'Staging demo episode 1', null, null],
+    [9351002, 1, 2, 'Staging demo episode 2', null, null],
+    [9351003, 1, 3, 'Staging demo episode 3', '/demo/demo-video.webm', '/demo/demo-subs.vtt'],
+  ];
+  for (const [id, season, number, title, media, subs] of eps) {
+    await pool.query(
+      `INSERT INTO tracker_episodes
+         (id, drama_id, season, number, title, minutes, media_url, subtitle_url,
+          description, access, added_by_id, added_by_username, is_demo, created_at)
+       VALUES ($1, $2, $3, $4, $5, 45, $6, $7, $8, 'free', 7100099, 'staging-demo-user', true,
+               now() - interval '6 days')
+       ON CONFLICT (id) DO NOTHING`,
+      [id, STUDIO_DEMO_DRAMA_ID, season, number, title, media, subs,
+       'Staging demo: a short summary of this episode.']
     );
   }
 }
@@ -3128,13 +3222,23 @@ tracker.post('/dramas', async (req, res) => {
     if (backdrop_url && (!/^https:\/\//.test(backdrop_url) || backdrop_url.length > 500)) {
       return res.status(400).json({ error: 'The backdrop link must start with https://' });
     }
+    // The Studio's own fields: the producing studio's name and, optionally,
+    // the series group a sequel belongs to. Both nullable.
+    const studio = typeof req.body.studio === 'string' ? req.body.studio.trim() : '';
+    if (studio.length > 60) return res.status(400).json({ error: 'The studio name must be 60 characters or fewer' });
+    const seriesId = req.body.seriesId == null || req.body.seriesId === '' ? null : parseInt(req.body.seriesId, 10);
+    if (seriesId !== null) {
+      if (!Number.isInteger(seriesId) || seriesId <= 0) return res.status(400).json({ error: 'The series group is not valid' });
+      const grp = await pool.query('SELECT 1 FROM studio_series WHERE id = $1', [seriesId]);
+      if (!grp.rows.length) return res.status(400).json({ error: 'The series group is not valid' });
+    }
     const r = await pool.query(
-      `INSERT INTO tracker_dramas (title, synopsis, year, country, genres, rating, poster_url, backdrop_url, added_by_id, added_by_username)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      `INSERT INTO tracker_dramas (title, synopsis, year, country, genres, rating, poster_url, backdrop_url, studio, series_id, added_by_id, added_by_username)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
       [title, synopsis || null, year, country || null,
        genreList.length ? genreList.join(', ') : null,
        rating == null ? null : Math.round(rating * 10) / 10,
-       poster_url, backdrop_url, req.user.id, req.user.username]
+       poster_url, backdrop_url, studio || null, seriesId, req.user.id, req.user.username]
     );
     return res.status(201).json({ drama: r.rows[0] });
   } catch (err) {
@@ -3173,6 +3277,7 @@ tracker.get('/dramas/:id', async (req, res) => {
     const eps = await pool.query(
       `SELECT e.id, e.season, e.number, e.title, e.minutes, e.watch_url,
               e.media_url, e.subtitle_url, e.access,
+              e.description, e.thumbnail_url, e.is_finale,
               e.added_by_id, e.added_by_username,
               ARRAY(SELECT w.username FROM tracker_watches w WHERE w.episode_id = e.id
                     ORDER BY w.watched_at) AS watched_by,
@@ -3275,15 +3380,26 @@ tracker.post('/dramas/:id/episodes', async (req, res) => {
       return res.status(400).json({ error: 'The subtitles link must be an https:// link or a path in this app' });
     const access = typeof req.body.access === 'string' && req.body.access ? req.body.access : 'free';
     if (!['free', 'vip', 'ads'].includes(access)) return res.status(400).json({ error: 'Access must be Free, VIP or Free with ads' });
+    // The Studio's own fields on an episode: a short description, a
+    // thumbnail link and the finale marker.
+    const description = typeof req.body.description === 'string' ? req.body.description.trim() : '';
+    if (description.length > 500) return res.status(400).json({ error: 'The description must be 500 characters or fewer' });
+    const thumbnail_url = typeof req.body.thumbnail_url === 'string' && req.body.thumbnail_url.trim()
+      ? req.body.thumbnail_url.trim() : null;
+    if (thumbnail_url && (!/^https:\/\//.test(thumbnail_url) || thumbnail_url.length > 500)) {
+      return res.status(400).json({ error: 'The thumbnail link must start with https://' });
+    }
+    const is_finale = req.body.is_finale === true || req.body.is_finale === 'true';
     const exists = await pool.query(
       `SELECT 1 FROM tracker_episodes WHERE drama_id = $1 AND season = $2 AND number = $3`,
       [req.params.id, season, number]
     );
     if (exists.rows.length) return res.status(409).json({ error: 'That season and episode number already exists' });
     const r = await pool.query(
-      `INSERT INTO tracker_episodes (drama_id, season, number, title, minutes, watch_url, media_url, subtitle_url, access, added_by_id, added_by_username)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-      [req.params.id, season, number, title, minutes, watch_url, media_url, subtitle_url, access, req.user.id, req.user.username]
+      `INSERT INTO tracker_episodes (drama_id, season, number, title, minutes, watch_url, media_url, subtitle_url, access, description, thumbnail_url, is_finale, added_by_id, added_by_username)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
+      [req.params.id, season, number, title, minutes, watch_url, media_url, subtitle_url, access,
+       description || null, thumbnail_url, is_finale, req.user.id, req.user.username]
     );
     return res.status(201).json({ episode: r.rows[0] });
   } catch (err) {
@@ -3306,6 +3422,194 @@ tracker.delete('/episodes/:id', async (req, res) => {
     return res.status(500).json({ error: 'Could not remove the episode' });
   }
 });
+
+// Edit one episode (the Studio's episode list "Edit" button). Same field
+// validation as the POST above; the same "only the person who added it may
+// change it" rule as the delete beside it.
+tracker.patch('/episodes/:id', async (req, res) => {
+  try {
+    const e = await pool.query(
+      `SELECT added_by_id, season, number FROM tracker_episodes WHERE id = $1`, [req.params.id]
+    );
+    if (!e.rows.length) return res.status(404).json({ error: 'Episode not found' });
+    if (Number(e.rows[0].added_by_id) !== Number(req.user.id)) {
+      return res.status(403).json({ error: 'Only the person who added it can change it' });
+    }
+    const b = req.body || {};
+    const sets = [];
+    const params = [];
+    const push = (col, val) => { params.push(val); sets.push(col + ' = $' + params.length); };
+
+    if (b.title !== undefined) {
+      const title = typeof b.title === 'string' ? b.title.trim() : '';
+      if (!title || title.length > 80) return res.status(400).json({ error: 'A title of 1 to 80 characters is required' });
+      push('title', title);
+    }
+    if (b.number !== undefined) {
+      const number = parseInt(b.number, 10);
+      if (!number || number < 1 || number > 999) return res.status(400).json({ error: 'Episode number must be 1 to 999' });
+      push('number', number);
+    }
+    if (b.minutes !== undefined) {
+      const minutes = b.minutes ? parseInt(b.minutes, 10) : null;
+      if (minutes !== null && (isNaN(minutes) || minutes < 1 || minutes > 600)) {
+        return res.status(400).json({ error: 'Minutes must be 1 to 600' });
+      }
+      push('minutes', minutes);
+    }
+    if (b.watch_url !== undefined) {
+      const u = typeof b.watch_url === 'string' && b.watch_url.trim() ? b.watch_url.trim() : null;
+      if (u && !/^https:\/\//.test(u)) return res.status(400).json({ error: 'The link must start with https://' });
+      push('watch_url', u);
+    }
+    if (b.media_url !== undefined) {
+      const u = typeof b.media_url === 'string' && b.media_url.trim() ? b.media_url.trim() : null;
+      if (u && !/^https:\/\//.test(u)) return res.status(400).json({ error: 'The video link must start with https://' });
+      push('media_url', u);
+    }
+    if (b.description !== undefined) {
+      const d = typeof b.description === 'string' ? b.description.trim() : '';
+      if (d.length > 500) return res.status(400).json({ error: 'The description must be 500 characters or fewer' });
+      push('description', d || null);
+    }
+    if (b.thumbnail_url !== undefined) {
+      const u = typeof b.thumbnail_url === 'string' && b.thumbnail_url.trim() ? b.thumbnail_url.trim() : null;
+      if (u && (!/^https:\/\//.test(u) || u.length > 500)) {
+        return res.status(400).json({ error: 'The thumbnail link must start with https://' });
+      }
+      push('thumbnail_url', u);
+    }
+    if (b.is_finale !== undefined) push('is_finale', b.is_finale === true || b.is_finale === 'true');
+    if (!sets.length) return res.status(400).json({ error: 'Nothing to change' });
+    params.push(req.params.id);
+    const r = await pool.query(
+      `UPDATE tracker_episodes SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING *`, params
+    );
+    return res.json({ episode: r.rows[0] });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Could not save the episode' });
+  }
+});
+
+// Set (or clear) one season's poster and finale tick — an upsert, so a
+// season poster can be set before or after its episodes exist. A cleared
+// poster sends an empty string; the finale tick is written either way.
+tracker.put('/dramas/:id/seasons/:season/poster', async (req, res) => {
+  try {
+    const season = parseInt(req.params.season, 10);
+    if (!season || season < 1 || season > 99) return res.status(400).json({ error: 'Season must be 1 to 99' });
+    const d = await pool.query(
+      `SELECT id FROM tracker_dramas WHERE id = $1 AND ${demoClause(req, 'is_demo', 2)}`,
+      [req.params.id, ...demoParams(req)]
+    );
+    if (!d.rows.length) return res.status(404).json({ error: 'Drama not found' });
+    const raw = typeof req.body.poster_url === 'string' ? req.body.poster_url.trim() : '';
+    const poster_url = raw || null;
+    if (poster_url && (!/^https:\/\//.test(poster_url) && !/^data:image\//.test(poster_url))) {
+      return res.status(400).json({ error: 'The poster link must start with https://' });
+    }
+    if (poster_url && poster_url.length > 500) {
+      return res.status(400).json({ error: 'The poster link is too long' });
+    }
+    const is_finale = req.body.is_finale === true || req.body.is_finale === 'true';
+    const r = await pool.query(
+      `INSERT INTO tracker_seasons (drama_id, season, poster_url, is_finale)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (drama_id, season) DO UPDATE
+         SET poster_url = EXCLUDED.poster_url, is_finale = EXCLUDED.is_finale
+       RETURNING *`,
+      [req.params.id, season, poster_url, is_finale]
+    );
+    return res.json({ season: r.rows[0] });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Could not save the season poster' });
+  }
+});
+
+// ── Contributor Studio read route ────────────────────────────────────────
+// The Studio's own title list: the group's tracker dramas (the shared feed),
+// filtered by the sidebar's genre slug and a search term, with each drama's
+// season and episode counts and its series group name. Per-genre counts ride
+// the same response so the sidebar can show them in one round trip. Gated by
+// the same signed-in rule the other curator work uses; ?demo=1 (staging) is
+// the only thing that includes the staging seed rows.
+const STUDIO_GENRES = ['thriller', 'horror', 'adventure', 'mystic', 'sci-fi', 'fantasy', 'isekai', 'action'];
+app.get('/api/studio/dramas', h(async (req, res) => {
+  if (!requireCurator(req, res)) return;
+  const demo = wantsDemo(req);
+  const genre = typeof req.query.genre === 'string' ? req.query.genre.trim().toLowerCase() : '';
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = 24;
+  const offset = (page - 1) * limit;
+
+  const where = [];
+  const params = [demo];
+  // The demo clause leaves the staging seed out unless ?demo=1, exactly as
+  // the tracker's own routes do.
+  where.push('($1 OR NOT d.is_demo)');
+  if (STUDIO_GENRES.includes(genre)) {
+    params.push('%' + genre + '%');
+    where.push('(lower(coalesce(d.genres, \'\')) LIKE $' + params.length + ')');
+  }
+  if (q) {
+    params.push('%' + q.toLowerCase() + '%');
+    where.push('lower(d.title) LIKE $' + params.length);
+  }
+  const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+
+  const countParams = [demo];
+  const genreCounts = { popular: 0 };
+  for (const g of STUDIO_GENRES) genreCounts[g] = 0;
+  const all = await pool.query(
+    `SELECT d.genres FROM tracker_dramas d WHERE ($1 OR NOT d.is_demo)`, countParams
+  );
+  for (const row of all.rows) {
+    const list = String(row.genres || '').toLowerCase().split(',').map((x) => x.trim()).filter(Boolean);
+    genreCounts.popular += 1;
+    for (const g of STUDIO_GENRES) {
+      if (list.some((x) => x === g || x.replace(/[^a-z]/g, '') === g.replace(/[^a-z]/g, ''))) genreCounts[g] += 1;
+    }
+  }
+
+  const rows = await pool.query(
+    `SELECT d.id, d.title, d.synopsis, d.year, d.country, d.genres, d.rating, d.poster_url, d.studio,
+            d.series_id, s.name AS series_name, d.added_by_username, d.created_at,
+            (SELECT COUNT(*)::int FROM tracker_seasons ts WHERE ts.drama_id = d.id) AS season_count,
+            (SELECT COUNT(*)::int FROM tracker_episodes e WHERE e.drama_id = d.id) AS episode_count,
+            (SELECT ts.poster_url FROM tracker_seasons ts WHERE ts.drama_id = d.id AND ts.season = 1) AS season1_poster_url,
+            (SELECT ts.is_finale FROM tracker_seasons ts WHERE ts.drama_id = d.id AND ts.season = 1) AS season1_is_finale
+       FROM tracker_dramas d
+       LEFT JOIN studio_series s ON s.id = d.series_id
+       ${whereSql}
+      ORDER BY d.created_at DESC, d.id DESC
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, limit, offset]
+  );
+  // The sidebar's "Series groups" section: the existing groups with how many
+  // titles each holds.
+  const groups = await pool.query(
+    `SELECT s.id, s.name, (SELECT COUNT(*)::int FROM tracker_dramas d
+        WHERE d.series_id = s.id AND ($1 OR NOT d.is_demo)) AS title_count
+       FROM studio_series s ORDER BY s.name`, [demo]
+  );
+  res.json({
+    items: rows.rows.map((r) => ({
+      id: Number(r.id), title: r.title, synopsis: r.synopsis, year: r.year, country: r.country,
+      genres: r.genres, rating: r.rating, poster_url: r.poster_url, studio: r.studio,
+      series_id: r.series_id == null ? null : Number(r.series_id), series_name: r.series_name,
+      added_by_username: r.added_by_username, created_at: r.created_at,
+      season_count: r.season_count, episode_count: r.episode_count,
+      season1_poster_url: r.season1_poster_url || null,
+      season1_is_finale: !!r.season1_is_finale,
+    })),
+    genre_counts: genreCounts,
+    groups: groups.rows.map((g) => ({ id: Number(g.id), name: g.name, title_count: g.title_count })),
+    page,
+  });
+}));
 
 tracker.put('/dramas/:id/follow', async (req, res) => {
   try {
@@ -3956,6 +4260,7 @@ async function start() {
       await seedSampleDramas();
       await seedDemoCatalog();
       await seedStagingVip();
+      await seedStudioDemo();
     } catch (err) {
       console.error('staging demo seed failed', err);
     }
