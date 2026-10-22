@@ -72,7 +72,10 @@
     { "name": "Studio lists records without artwork", "path": "/posters?demo=1", "expectText": "No artwork yet" },
     { "id": "home-demo-rows", "name": "Home demo catalog rows", "path": "/?demo=1", "expectText": "Recommended for You", "visual": true, "impact": ["server.js", "public/js/views/home.js", "public/js/ui.js", "public/js/i18n.js", "styles/**"] },
     { "name": "Drama detail shows similar dramas", "path": "/drama/820001?demo=1", "expectText": "More like this" },
-    { "name": "Player shows streaming unavailable state", "path": "/watch/820010/3?demo=1", "expectText": "Streaming unavailable" }
+    { "name": "Player shows streaming unavailable state", "path": "/watch/820010/3?demo=1", "expectText": "Streaming unavailable" },
+    { "name": "Studio screen", "path": "/studio", "expectText": "Create a new drama title" },
+    { "name": "Studio episodic structure", "path": "/studio?demo=1", "expectText": "Episodic structure", "expectSelector": "[data-episodic] .list-row" },
+    { "id": "studio.screen", "name": "Studio screen (visual)", "path": "/studio?demo=1", "expectText": "Create a new drama title", "expectSelector": "[data-episodic] .list-row", "visual": true, "impact": ["public/js/views/studio.js", "public/js/views/profile.js", "public/js/router.js", "public/js/i18n.js", "public/js/ui.js", "styles/**", "server.js"] }
   ],
   "visibility": {
     "build": "public",

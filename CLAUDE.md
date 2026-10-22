@@ -255,6 +255,27 @@ keeping every text pair at 4.5:1 or more in both looks.
   dramas and their viewer demo rows are gone with the content wipe, and
   responses without `?demo=1` still exclude any `is_demo` rows so plain
   routes stay production-shaped.
+- **The contributor Studio (`/studio`, "Chinese Drama Hub Studio")** is
+  the one-place workflow for building a drama title and its first season:
+  a fixed dark top bar (mark, wordmark, the links My studio / All
+  contributor activity / Profile, and one amber "Upload video" button), a
+  nested genre sidebar that becomes a chip row on a phone, the "Create a
+  new drama title" form, and an "Episodic structure" panel (Season 1
+  container, the Add new episode sub-form, an Upload season poster zone
+  and the episode list with Edit). **Its gate is signed-in membership** —
+  the same `requireCurator` helper (`!req.user` → 401 `account_required`)
+  that gates Add a drama and Posters; a guest or signed-out visitor sees
+  the make-an-account card. It writes the tracker's own tables through the
+  tracker writers (`POST /api/tracker/dramas`, `POST
+  /api/tracker/dramas/:id/episodes`, `PATCH /api/tracker/episodes/:id`, `PUT
+  /api/tracker/dramas/:id/seasons/:season/poster`), so a new title appears
+  in the group's feed at `/tracker` and **never** in Home's verified
+  catalog. "Upload video" is a link step, not a file picker: the platform
+  stores images only, so an episode always carries an https video URL
+  (HLS or MP4). Its new columns and tables (`tracker_dramas.studio`,
+  `tracker_dramas.series_id`, `studio_series`, `tracker_seasons`,
+  `tracker_episodes.description/thumbnail_url/is_finale`) are all public —
+  they hold the same shared feed the tracker already shows.
 - **Profiles and Add a drama (catalog side):** `/profiles` is the signed-in
   account's "Who's watching?" picker (per-account `profiles` table,
   `/api/profiles` CRUD, cap of 5, last-profile guard; selection kept in

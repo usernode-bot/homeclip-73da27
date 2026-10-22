@@ -72,6 +72,8 @@ const ICON_PATHS = {
   volume: '<path d="M11 5L6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 010 7"/><path d="M18.5 6a9 9 0 010 12"/>',
   volumeX: '<path d="M11 5L6 9H3v6h3l5 4V5z"/><path d="M16 9l5 5"/><path d="M21 9l-5 5"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
+  folder: '<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>',
+  film: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16"/><path d="M16 4v16"/><path d="M3 9h5"/><path d="M16 9h5"/><path d="M3 15h5"/><path d="M16 15h5"/>',
 };
 
 export function icon(name, cls) {
