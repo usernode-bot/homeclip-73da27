@@ -72,7 +72,7 @@ const STRINGS = {
     'detail.episodes': 'Episodes',
     'detail.showMore': 'Show more',
     'detail.showLess': 'Show less',
-    'detail.play': 'Play',
+    'detail.play': 'Watch now',
     'detail.resume': 'Continue EP {n}',
     'detail.add': 'Add to My List',
     'detail.added': 'In My List',
@@ -145,6 +145,7 @@ const STRINGS = {
     'player.vipPlans': 'Go to VIP plans',
     'player.unavailable': 'Streaming unavailable',
     'player.unavailableBody': 'No authorized video source is set for this episode yet. Try another episode or come back later.',
+    'player.unavailableLink': 'Watch on Youku',
 
     'demo.note': 'Staging demo',
 
@@ -409,7 +410,7 @@ const STRINGS = {
     'detail.episodes': 'Episode',
     'detail.showMore': 'Tampilkan lebih banyak',
     'detail.showLess': 'Tampilkan lebih sedikit',
-    'detail.play': 'Putar',
+    'detail.play': 'Tonton sekarang',
     'detail.resume': 'Lanjut EP {n}',
     'detail.add': 'Tambah ke Daftar Saya',
     'detail.added': 'Ada di Daftar Saya',
@@ -482,6 +483,7 @@ const STRINGS = {
     'player.vipPlans': 'Ke paket VIP',
     'player.unavailable': 'Streaming tidak tersedia',
     'player.unavailableBody': 'Belum ada sumber video resmi untuk episode ini. Coba episode lain atau datang kembali nanti.',
+    'player.unavailableLink': 'Tonton di Youku',
 
     'demo.note': 'Demo staging',
 

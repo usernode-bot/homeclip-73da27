@@ -422,6 +422,15 @@ ALTER TABLE dramas ADD COLUMN IF NOT EXISTS needs_review BOOLEAN NOT NULL DEFAUL
 ALTER TABLE dramas ADD COLUMN IF NOT EXISTS review_reason TEXT;
 ALTER TABLE dramas ADD COLUMN IF NOT EXISTS is_trending BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE dramas ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT false;
+-- The drama's page on its authorized streaming platform (nullable): shown by
+-- the player's "Episode unavailable" state while no licensed video source
+-- exists. NULL means not configured — the overlay then omits the link.
+ALTER TABLE dramas ADD COLUMN IF NOT EXISTS watch_url TEXT;
+-- An episode's video_url is now nullable: NULL means "no licensed source
+-- configured" (a real show imported without streaming rights), and the
+-- player must not stand a sample clip in for it. Existing rows keep their
+-- committed sample-clip URLs.
+ALTER TABLE episodes ALTER COLUMN video_url DROP NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS dramas_tmdb_id_idx ON dramas(tmdb_id) WHERE tmdb_id IS NOT NULL;
 `;
 
@@ -565,7 +574,7 @@ async function seedViewerDemoProfiles(userId) {
   }
 }
 
-const DRAMA_FIELDS = 'd.id, d.title, d.original_title, d.alternative_titles, d.poster_url, d.backdrop_url, d.year, d.country, d.language, d.genres, d.genres_raw, d.rating, d.popularity, d.featured, d.cast_names, d.director, d.total_episodes, d.episode_duration_min, d.content_type, d.tmdb_id, d.source_url, d.verified, d.needs_review, d.review_reason, d.is_trending, d.is_demo, d.synopsis_en, d.synopsis_id';
+const DRAMA_FIELDS = 'd.id, d.title, d.original_title, d.alternative_titles, d.poster_url, d.backdrop_url, d.watch_url, d.year, d.country, d.language, d.genres, d.genres_raw, d.rating, d.popularity, d.featured, d.cast_names, d.director, d.total_episodes, d.episode_duration_min, d.content_type, d.tmdb_id, d.source_url, d.verified, d.needs_review, d.review_reason, d.is_trending, d.is_demo, d.synopsis_en, d.synopsis_id';
 
 // The catalog's genre vocabulary: what a filter may ask for and what a
 // manual record may carry. Providers/tmdb.js maps provider genre names onto
@@ -921,7 +930,7 @@ app.get('/api/admin/tmdb/tv/:tmdbId', h(async (req, res) => {
 // Verify and import one provider record (POST /api/admin/dramas/import).
 // b carries { tmdbId,
 // confirmTitle, confirmYear, posterPath?, backdropPath?, contentType?,
-// dramaId? }; confirmTitle/confirmYear are required unless this is an
+// dramaId?, noSampleVideo? }; confirmTitle/confirmYear are required unless this is an
 // artwork-only replace (dramaId set, no confirm fields). b.defaultArtwork
 // picks the record's first poster and backdrop when the caller names no
 // paths. Throws a coded Error on a failed check: the route maps it to its
@@ -1039,13 +1048,17 @@ async function importVerifiedDrama(b) {
   // Episodes point at the committed six-clip pool so playback keeps
   // working — the catalog's stride (id*5+n)%6, never a URL that does not
   // exist. A flat 1..n list for phase one (no season column yet).
+  // b.noSampleVideo opts OUT of the pool: a real show with no licensed
+  // streaming source gets video_url NULL — the player answers with the
+  // honest "Episode unavailable" state, never a sample clip standing in
+  // for a real show.
   const eps = Math.min(raw.totalEpisodes || 0, 100);
   for (let n = 1; n <= eps; n++) {
     await pool.query(
       `INSERT INTO episodes (drama_id, num, duration_min, video_url)
        VALUES ($1,$2,$3,$4)
        ON CONFLICT (drama_id, num) DO NOTHING`,
-      [id, n, raw.episodeDurationMin || 45, VIDEO_BASE + VIDEO_POOL[(id * 5 + n) % VIDEO_POOL.length]]
+      [id, n, raw.episodeDurationMin || 45, b.noSampleVideo ? null : VIDEO_BASE + VIDEO_POOL[(id * 5 + n) % VIDEO_POOL.length]]
     );
   }
   return { ok: true, id };

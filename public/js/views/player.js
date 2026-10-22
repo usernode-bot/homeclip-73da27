@@ -124,11 +124,17 @@ export async function render({ view, params, query }) {
         '</div>' +
       '</div>' +
       // Streaming unavailable: an unlocked episode whose record carries no
-      // authorized video URL. A clear state instead of a fake player.
+      // authorized video URL. A clear state instead of a fake player. The
+      // primary action hands the viewer to the drama's authorized streaming
+      // platform when one is configured (d.watch_url).
       '<div class="absolute inset-0 z-10 hidden flex-col items-center justify-center gap-2 bg-black/85 p-6 text-center" data-unavail>' +
+        '<span class="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 text-white">' + icon('globe', 'h-6 w-6') + '</span>' +
         '<p class="text-heading text-white">' + t('player.unavailable') + '</p>' +
         '<p class="text-small text-white/70">' + t('player.unavailableBody') + '</p>' +
-        '<button type="button" class="btn-secondary mt-2" data-unavail-back>' + t('common.back') + '</button>' +
+        '<div class="mt-2 flex flex-col items-center gap-2">' +
+          '<a class="btn-primary hidden" data-unav-link target="_blank" rel="noopener">' + t('player.unavailableLink') + '</a>' +
+          '<button type="button" class="btn-secondary" data-unavail-back>' + t('common.back') + '</button>' +
+        '</div>' +
       '</div>' +
       // Bottom controls.
       '<div class="hc-player-controls" data-controlswrap>' +
@@ -161,6 +167,7 @@ export async function render({ view, params, query }) {
   const endedActions = stage.querySelector('[data-ended-actions]');
   const paywall = stage.querySelector('[data-paywall]');
   const unavail = stage.querySelector('[data-unavail]');
+  const unavLink = stage.querySelector('[data-unav-link]');
   const controlsWrap = stage.querySelector('[data-controlswrap]');
   const epLabel = stage.querySelector('[data-eplabel]');
   const timeLabel = stage.querySelector('[data-time]');
@@ -288,6 +295,13 @@ export async function render({ view, params, query }) {
     unavailUi = true;
     hideError();
     cancelCountdown();
+    hidePaywall();
+    if (d.watch_url) {
+      unavLink.href = d.watch_url;
+      unavLink.classList.remove('hidden');
+    } else {
+      unavLink.classList.add('hidden');
+    }
     unavail.classList.remove('hidden');
     unavail.classList.add('flex');
     controlsWrap.classList.add('hidden');
@@ -295,10 +309,13 @@ export async function render({ view, params, query }) {
   }
 
   function hideUnavailable() {
+    if (!unavailUi) return;
     unavailUi = false;
     unavail.classList.add('hidden');
     unavail.classList.remove('flex');
+    unavLink.classList.add('hidden');
     controlsWrap.classList.remove('hidden');
+    updateStageUi();
   }
 
   // Append the webm/mp4 pair for an extensionless clip URL. The WebM source
@@ -357,10 +374,11 @@ export async function render({ view, params, query }) {
 
     // A locked episode carries no video URL from the server; the paywall
     // is the stage. Episode rows and badges still navigate here on purpose.
-    if (src.locked) { showPaywall(); return; }
+    if (src.locked) { hideUnavailable(); showPaywall(); return; }
     hidePaywall();
     // An unlocked episode with no video URL: no authorized source exists,
-    // so the stage says so instead of pretending to play.
+    // so the stage says so instead of pretending to play (never a sample
+    // clip standing in for a real show).
     if (!src.videoUrl) { showUnavailable(); return; }
     hideUnavailable();
 
